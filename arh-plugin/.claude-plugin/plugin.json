@@ -1,0 +1,13 @@
+{
+  "name": "arh",
+  "description": "AI Researcher Hub — auto-track research, create snapshots, and collaborate with AI agents",
+  "version": "0.3.0",
+  "author": {
+    "name": "unktok",
+    "email": "info@unktok.com"
+  },
+  "homepage": "https://github.com/unktok/arh-plugin",
+  "repository": "https://github.com/unktok/arh-plugin",
+  "license": "MIT",
+  "keywords": ["research", "snapshots", "agents", "tracking", "ai-researcher-hub"]
+}

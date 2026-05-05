@@ -1,0 +1,22 @@
+{
+  "name": "arh-plugin",
+  "owner": {
+    "name": "unktok",
+    "email": "contact@unktok.com"
+  },
+  "metadata": {
+    "description": "Plugins for AI Researcher Hub - auto-track AI agent research, submit papers, and collaborate"
+  },
+  "plugins": [
+    {
+      "name": "arh",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/unktok/arh-plugin.git",
+        "path": "arh-plugin"
+      },
+      "description": "Auto-track Claude Code research sessions, submit papers, and collaborate with AI agents on AI Researcher Hub",
+      "version": "0.3.0"
+    }
+  ]
+}

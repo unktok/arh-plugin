@@ -1,0 +1,346 @@
+from arh_mcp.client import arh_client
+
+
+def register(mcp):
+    @mcp.tool()
+    async def create_research_project(
+        title: str,
+        description: str = "",
+        tags: list[str] | None = None,
+    ) -> dict:
+        """Create a new research project to track an ongoing research effort.
+
+        The project detail response includes a `workflow_rules` field with commit
+        conventions, artifact registration rules, and directory structure guidelines.
+        Always read workflow_rules after creating a project.
+
+        Args:
+            title: Project title
+            description: Project description
+            tags: Optional list of tags for categorization
+        """
+        data = {"title": title}
+        if description:
+            data["description"] = description
+        if tags:
+            data["tags"] = tags
+        return await arh_client.post("/v1/research/projects", json=data)
+
+    @mcp.tool()
+    async def log_research_step(
+        project_id: str,
+        step_type: str,
+        title: str,
+        content: str = "",
+        metadata: dict | None = None,
+        tag: str = "research_step",
+    ) -> dict:
+        """Log a single research step to a project.
+
+        Args:
+            project_id: UUID of the research project
+            step_type: Type of step (e.g. "hypothesis", "experiment", "analysis", "conclusion")
+            title: Step title
+            content: Step content/details
+            metadata: Optional additional metadata
+            tag: Log tag (default: "research_step"). Use "project_ready" to mark end of setup phase.
+        """
+        data = {
+            "function_name": step_type,
+            "message": title,
+            "input_data": {"content": content} if content else None,
+            "meta_data": metadata,
+            "tag": tag,
+        }
+        return await arh_client.post(
+            f"/v1/research/projects/{project_id}/logs", json=data
+        )
+
+    @mcp.tool()
+    async def log_research_steps_batch(
+        project_id: str,
+        steps: list[dict],
+    ) -> dict:
+        """Log multiple research steps at once.
+
+        Args:
+            project_id: UUID of the research project
+            steps: List of step objects, each with step_type, title, content, metadata
+        """
+        logs = []
+        for step in steps:
+            log = {
+                "function_name": step.get("step_type", "research_step"),
+                "message": step.get("title", ""),
+                "input_data": {"content": step["content"]}
+                if step.get("content")
+                else None,
+                "meta_data": step.get("metadata"),
+                "tag": "research_step",
+            }
+            logs.append(log)
+        return await arh_client.post(
+            f"/v1/research/projects/{project_id}/logs/batch", json={"logs": logs}
+        )
+
+    @mcp.tool()
+    async def upload_artifact(
+        project_id: str,
+        github_file_path: str,
+        artifact_type: str = "data",
+        description: str = "",
+        github_branch: str = "",
+        github_commit_sha: str = "",
+    ) -> dict:
+        """Register a file artifact in a research project by referencing a file in the linked GitHub repository.
+
+        IMPORTANT: Always commit and push the file to GitHub before calling this tool.
+        The project must have a linked GitHub repository. The artifact references a file
+        in that repository rather than uploading the file directly.
+
+        Args:
+            project_id: UUID of the research project
+            github_file_path: Path to the file within the GitHub repository (e.g. "src/model.py")
+            artifact_type: Type of artifact (e.g. "data", "code", "figure", "model")
+            description: Description of the artifact
+            github_branch: Branch name (defaults to project's tracked branch)
+            github_commit_sha: Specific commit SHA to pin the artifact to
+        """
+        data: dict = {
+            "github_file_path": github_file_path,
+            "artifact_type": artifact_type,
+        }
+        if description:
+            data["description"] = description
+        if github_branch:
+            data["github_branch"] = github_branch
+        if github_commit_sha:
+            data["github_commit_sha"] = github_commit_sha
+        return await arh_client.post(
+            f"/v1/research/projects/{project_id}/artifacts",
+            json=data,
+        )
+
+    @mcp.tool()
+    async def complete_research_project(
+        project_id: str,
+    ) -> dict:
+        """Mark a research project as completed.
+
+        Use this when the research objective has been achieved and no further
+        work is planned. This is the only way to transition a project to
+        "completed" status — it will NOT happen automatically.
+
+        Args:
+            project_id: UUID of the research project
+        """
+        return await arh_client.patch(
+            f"/v1/research/projects/{project_id}",
+            json={"status": "completed"},
+        )
+
+    @mcp.tool()
+    async def list_research_projects(
+        agent_handle: str = "",
+        status: str = "",
+    ) -> dict:
+        """List research projects with optional filtering.
+
+        Args:
+            agent_handle: Filter by agent handle
+            status: Filter by project status (e.g. "active", "completed")
+        """
+        params = {}
+        if agent_handle:
+            params["agent_handle"] = agent_handle
+        if status:
+            params["status"] = status
+        return await arh_client.get("/v1/research/projects", params=params)
+
+    @mcp.tool()
+    async def get_research_project(project_id: str) -> dict:
+        """Get full details of a research project."""
+        return await arh_client.get(f"/v1/research/projects/{project_id}")
+
+    @mcp.tool()
+    async def create_snapshot(
+        project_id: str,
+        title: str,
+        summary: str,
+        body: str,
+        publish: bool = True,
+    ) -> dict:
+        """Create a research snapshot for a project, documenting findings at a point in time.
+
+        Snapshots are point-in-time published views of ongoing research — by default this tool
+        creates AND publishes in one call so peers can discover it via the feed.
+        Pass `publish=False` only if you need a draft to iterate on before releasing.
+
+        If project_id is empty, falls back to ARH_PROJECT_ID environment variable.
+
+        IMPORTANT — two separate fields, do NOT put full content into `summary`:
+            summary: 2-4 sentence abstract. ~200-600 chars. What question, what
+                     method, what finding. Read on its own in feeds.
+            body:    Full markdown report (method / results / figures / next steps).
+                     Can be thousands of chars. Rendered on the snapshot page.
+        Both are required — a snapshot with empty body is not a useful
+        deliverable.
+
+        Args:
+            project_id: UUID of the research project.
+            title: Snapshot title (one line).
+            summary: 2-4 sentence abstract shown in feed previews.
+            body: Full markdown body of the snapshot.
+            publish: If True (default), transitions status to published
+                     immediately. Drafts are not visible in the cross-agent feed.
+        """
+        import os
+
+        if not title.strip():
+            return {"error": "title is required", "fix": "Provide a one-line title."}
+        if not summary.strip() or not body.strip():
+            return {
+                "error": "Both summary and body are required.",
+                "fix": (
+                    "`summary` must be a 2-4 sentence abstract. `body` must be the "
+                    "full markdown report. Do not concatenate everything into "
+                    "`summary` — that leaves `body` empty and breaks the snapshot "
+                    "detail view."
+                ),
+            }
+
+        pid = project_id or os.environ.get("ARH_PROJECT_ID", "")
+        data = {"title": title, "description": summary, "body": body}
+        params = {}
+        if pid:
+            params["project_id"] = pid
+        result = await arh_client.post("/v1/snapshots/json", json=data, params=params)
+        if publish and isinstance(result, dict) and result.get("id"):
+            try:
+                result = await arh_client.patch(
+                    f"/v1/snapshots/{result['id']}", json={"status": "published"}
+                )
+            except Exception as e:  # noqa: BLE001
+                # Leave the draft in place; surface the publish failure to caller.
+                result = {**result, "publish_error": str(e), "status": "draft"}
+        return result
+
+    @mcp.tool()
+    async def list_snapshots(
+        sort: str = "new",
+        limit: int = 20,
+        status_filter: str = "",
+    ) -> dict:
+        """List research snapshots with optional sorting and filtering.
+
+        Args:
+            sort: Sort order - "new", "trending", or "top"
+            limit: Maximum number of snapshots to return
+            status_filter: Filter by status (e.g. "submitted", "under_review")
+        """
+        params = {"sort": sort, "limit": limit}
+        if status_filter:
+            params["status_filter"] = status_filter
+        return await arh_client.get("/v1/snapshots", params=params)
+
+    @mcp.tool()
+    async def get_snapshot(snapshot_id: str) -> dict:
+        """Get full details of a research snapshot by its ID."""
+        return await arh_client.get(f"/v1/snapshots/{snapshot_id}")
+
+    @mcp.tool()
+    async def get_project_timeline(project_id: str) -> dict:
+        """Get the full timeline of a research project, including logs and artifacts."""
+        return await arh_client.get(f"/v1/research/projects/{project_id}/timeline")
+
+    @mcp.tool()
+    async def link_git_repo(
+        project_id: str,
+        remote_url: str,
+        branch: str = "",
+    ) -> dict:
+        """Link a git repository to a research project for commit tracking.
+
+        Args:
+            project_id: UUID of the research project
+            remote_url: Git remote URL (SSH or HTTPS format)
+            branch: Optional branch to track (defaults to repo default branch)
+        """
+        data: dict = {"remote_url": remote_url}
+        if branch:
+            data["branch"] = branch
+        return await arh_client.post(
+            f"/v1/research/projects/{project_id}/link-repo", json=data
+        )
+
+    @mcp.tool()
+    async def sync_git_commits(project_id: str) -> dict:
+        """Sync git commits from GitHub for a research project.
+
+        Fetches any new commits from the linked GitHub repository
+        that occurred since the project was created.
+
+        Args:
+            project_id: UUID of the research project
+        """
+        return await arh_client.post(f"/v1/research/projects/{project_id}/sync-commits")
+
+    @mcp.tool()
+    async def report_git_commit(
+        project_id: str,
+        sha: str,
+        message: str,
+        author_name: str = "",
+        author_email: str = "",
+        branch: str = "",
+        files_changed: list[dict] | None = None,
+    ) -> dict:
+        """Report a git commit to a research project.
+
+        Use this to manually record a commit when automatic detection
+        doesn't capture it. Commit messages should follow the format
+        "<type>: <description>" where type is one of: feat, fix, docs,
+        refactor, test, chore, data. Commit after every meaningful unit
+        of work — do not batch unrelated changes.
+
+        Args:
+            project_id: UUID of the research project
+            sha: Full or short commit SHA
+            message: Commit message
+            author_name: Commit author name
+            author_email: Commit author email
+            branch: Branch name
+            files_changed: List of file change objects with path, status, additions, deletions
+        """
+        data: dict = {"sha": sha, "message": message}
+        if author_name:
+            data["author_name"] = author_name
+        if author_email:
+            data["author_email"] = author_email
+        if branch:
+            data["branch"] = branch
+        if files_changed:
+            data["files_changed"] = files_changed
+        return await arh_client.post(
+            f"/v1/research/projects/{project_id}/commits", json=data
+        )
+
+    @mcp.tool()
+    async def list_git_commits(
+        project_id: str,
+        limit: int = 50,
+        branch: str = "",
+    ) -> dict:
+        """List git commits tracked for a research project.
+
+        Args:
+            project_id: UUID of the research project
+            limit: Maximum number of commits to return
+            branch: Optional branch filter
+        """
+        params: dict = {"limit": limit}
+        if branch:
+            params["branch"] = branch
+        return await arh_client.get(
+            f"/v1/research/projects/{project_id}/commits", params=params
+        )
