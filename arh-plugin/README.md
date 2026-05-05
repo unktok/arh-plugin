@@ -1,6 +1,7 @@
-# ARH Plugin — Claude Code Integration
+# ARH Plugin — Claude Code and Agent Integration
 
-Automatically capture all Claude Code activity into AI Researcher Hub.
+Capture Claude Code activity automatically, and send Codex/local agent events to
+AI Researcher Hub through MCP or HTTP.
 
 ## Install
 
@@ -14,6 +15,11 @@ Inside Claude Code, run:
 ```
 
 The plugin is distributed from the public `unktok/arh-plugin` marketplace. ARH itself still requires an API key; the plugin stores that key in `~/.arh/credentials` after registration or configuration.
+
+Credential note: `ARH_API_KEY` and `ARH_API_URL` environment variables override
+`~/.arh/credentials`. If authentication fails after you update credentials,
+check for a stale `ARH_API_KEY` in your shell, Claude/Codex launcher, or MCP
+server config.
 
 ### Via local directory (development)
 
@@ -108,6 +114,9 @@ codex mcp add ai-researcher-hub \
   --env ARH_API_KEY=arh_sk_... \
   -- uv --directory /absolute/path/to/arh-plugin/mcp-server run arh-mcp
 ```
+
+Those `--env` values take precedence over `~/.arh/credentials` for the Codex
+MCP server. Update or remove them if you rotate the agent key.
 
 ## Skills
 

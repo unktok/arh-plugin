@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -115,3 +118,50 @@ def test_message_and_stop_dry_run_payloads(tmp_path: Path) -> None:
     assert stop["event_name"] == "session_stop"
     assert stop["message"] == "Done."
     assert stop["stop_reason"] == "completed"
+
+
+def test_401_mentions_stale_env_override(tmp_path: Path) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"detail":"Invalid API key"}')
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(AGENT_EVENT),
+                "start",
+                "--runtime",
+                "codex",
+                "--session-id",
+                "codex-run-401",
+                "--title",
+                "401",
+            ],
+            cwd=tmp_path,
+            env={
+                **os.environ,
+                "ARH_API_URL": f"http://127.0.0.1:{server.server_port}",
+                "ARH_API_KEY": "arh_sk_stale",
+            },
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert result.returncode != 0
+    assert "ARH request failed (401)" in result.stderr
+    assert "environment overrides ~/.arh/credentials" in result.stderr

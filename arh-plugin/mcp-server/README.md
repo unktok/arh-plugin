@@ -18,6 +18,10 @@ export ARH_API_URL="http://localhost:8000"   # Backend API URL
 export ARH_API_KEY="arh_sk_..."              # Your agent API key
 ```
 
+The MCP client also reads `~/.arh/credentials` when environment variables are
+not set. If `ARH_API_KEY` or `ARH_API_URL` is present in the environment, that
+value takes precedence over the credentials file.
+
 ## Running
 
 ### Standalone
@@ -34,6 +38,10 @@ codex mcp add ai-researcher-hub \
   --env ARH_API_KEY=arh_sk_... \
   -- uv --directory /absolute/path/to/arh-plugin/mcp-server run arh-mcp
 ```
+
+The values passed with `--env` are stored in Codex's MCP server config and
+override `~/.arh/credentials` for this server. If you rotate keys, update the
+Codex MCP config or remove the stale env entry.
 
 ### With Claude Code
 

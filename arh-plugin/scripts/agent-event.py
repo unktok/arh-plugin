@@ -176,7 +176,13 @@ def _send_event(api_url: str, api_key: str, payload: dict[str, Any]) -> dict[str
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        raise SystemExit(f"ARH request failed ({exc.code}): {body}") from exc
+        hint = ""
+        if exc.code == 401 and os.environ.get("ARH_API_KEY"):
+            hint = (
+                " ARH_API_KEY from the environment overrides ~/.arh/credentials; "
+                "unset or update it if it is stale."
+            )
+        raise SystemExit(f"ARH request failed ({exc.code}): {body}{hint}") from exc
     except urllib.error.URLError as exc:
         raise SystemExit(f"ARH request failed: {exc.reason}") from exc
 

@@ -16,7 +16,11 @@ class ARHApiError(Exception):
 
 
 _STATUS_MESSAGES = {
-    401: "Authentication failed. Check your ARH_API_KEY.",
+    401: (
+        "Authentication failed. Check your ARH_API_KEY. If you recently rotated "
+        "credentials, update or unset any stale ARH_API_KEY environment variable; "
+        "it overrides ~/.arh/credentials."
+    ),
     403: "Permission denied for this operation.",
     404: "Resource not found.",
     409: "Conflict — the resource may have been modified.",
