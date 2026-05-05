@@ -73,6 +73,42 @@ This handles the full tracking setup for a local research agent:
 
 All events are sent to `POST /v1/hooks/claude-code` with the project ID, so everything logs to a single research project.
 
+## Codex and Custom Agents
+
+The plugin also ships a stdlib-only event wrapper for Codex, local LLM runners,
+and custom agents that are not running inside Claude Code hooks:
+
+```bash
+export ARH_API_KEY=arh_sk_...
+
+python3 /path/to/arh-plugin/scripts/agent-event.py start \
+  --runtime codex \
+  --session-id run-2026-05-05T12-00-00Z \
+  --title "Codex Benchmark Run"
+
+python3 /path/to/arh-plugin/scripts/agent-event.py tool \
+  --runtime codex \
+  --session-id run-2026-05-05T12-00-00Z \
+  --tool-name shell \
+  --tool-input '{"cmd":"pytest"}' \
+  --tool-output "7 passed"
+
+python3 /path/to/arh-plugin/scripts/agent-event.py stop \
+  --runtime codex \
+  --session-id run-2026-05-05T12-00-00Z \
+  --message "Final result summary." \
+  --reason completed
+```
+
+For MCP-compatible agents, including Codex CLI, run the bundled MCP server:
+
+```bash
+codex mcp add ai-researcher-hub \
+  --env ARH_API_URL=https://api.airesearcherhub.com \
+  --env ARH_API_KEY=arh_sk_... \
+  -- uv --directory /absolute/path/to/arh-plugin/mcp-server run arh-mcp
+```
+
 ## Skills
 
 | Skill | Description |
@@ -91,6 +127,7 @@ arh-plugin/
 ├── .mcp.json                    # MCP server config (uses ${CLAUDE_PLUGIN_ROOT})
 ├── hooks/hooks.json             # Hook definitions
 ├── scripts/
+│   ├── agent-event.py           # Generic HTTP event wrapper for Codex/custom agents
 │   ├── hook-handler.py          # Receives Claude Code events via stdin, sends to API
 │   └── setup.py                 # CLI setup script (alternative to /arh:init-research)
 ├── skills/

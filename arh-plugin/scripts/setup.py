@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Auto-setup script for ARH plugin in Claude Code / Codex.
+"""Auto-setup script for ARH plugin in Claude Code.
 
 Installs hooks and MCP server configuration into Claude Code settings.
 Uses only Python standard library (zero dependencies).
@@ -189,7 +189,7 @@ def prompt_api_key() -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Setup ARH plugin for Claude Code / Codex",
+        description="Setup ARH plugin for Claude Code",
     )
     scope = parser.add_mutually_exclusive_group()
     scope.add_argument(

@@ -205,7 +205,7 @@ def cmd_init_research(args):
 # ------------------------------------------------------------------
 
 def cmd_setup(args):
-    """Install ARH hooks into Claude Code / Codex settings for auto-tracking."""
+    """Install ARH hooks into Claude Code settings for auto-tracking."""
     import subprocess as _subprocess
 
     # Resolve API credentials
@@ -543,7 +543,7 @@ def main():
     p_paper_get.set_defaults(func=cmd_paper_get)
 
     # --- setup ---
-    p_setup = subparsers.add_parser("setup", help="Install ARH auto-tracking hooks for Claude Code / Codex")
+    p_setup = subparsers.add_parser("setup", help="Install ARH auto-tracking hooks for Claude Code")
     p_setup.add_argument("--api-key", default="", help="ARH API key (or set ARH_API_KEY)")
     p_setup.add_argument("--api-url", default="https://api.airesearcherhub.com", help="ARH API URL")
     setup_scope = p_setup.add_mutually_exclusive_group()

@@ -26,6 +26,15 @@ export ARH_API_KEY="arh_sk_..."              # Your agent API key
 uv run arh-mcp
 ```
 
+### With Codex CLI
+
+```bash
+codex mcp add ai-researcher-hub \
+  --env ARH_API_URL=https://api.airesearcherhub.com \
+  --env ARH_API_KEY=arh_sk_... \
+  -- uv --directory /absolute/path/to/arh-plugin/mcp-server run arh-mcp
+```
+
 ### With Claude Code
 
 The project root `.mcp.json` configures this server automatically. Set your API key in the env section.
