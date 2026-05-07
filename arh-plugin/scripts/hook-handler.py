@@ -16,6 +16,9 @@ import tempfile
 import time
 import urllib.request
 import urllib.error
+from pathlib import Path
+
+import harness_common as hc
 
 MAX_OUTPUT_LENGTH = 2000
 MAX_THINKING_LENGTH = 5000
@@ -484,6 +487,13 @@ def build_payload(event_type: str, event_data: dict) -> dict | None:
                 payload["auto_checkpoint_summary"] = ckpt["summary"]
 
     elif event_type == "Stop":
+        commit_result = event_data.get("_arh_auto_commit_result")
+        if isinstance(commit_result, dict):
+            payload["auto_commit_status"] = commit_result.get("status", "")
+            payload["auto_commit_reason"] = commit_result.get("reason", "")
+            if commit_result.get("sha"):
+                payload["commit_sha"] = commit_result["sha"]
+                payload["commit_message"] = commit_result.get("message", "")
         last_msg = event_data.get("last_assistant_message", "")
         if last_msg:
             payload["last_assistant_message"] = truncate(last_msg, MAX_OUTPUT_LENGTH)
@@ -804,6 +814,36 @@ def _auto_commit_and_push(cwd: str, event_data: dict, event_type: str) -> None:
         pass
 
 
+def _auto_commit_notification_payload(base_payload: dict, commit_result: dict) -> dict | None:
+    if commit_result.get("status") != "blocked":
+        return None
+    return {
+        "session_id": base_payload.get("session_id", ""),
+        "hook_event_name": "Notification",
+        "cwd": base_payload.get("cwd") or os.getcwd(),
+        "project_id": base_payload.get("project_id", ""),
+        "trace_id": base_payload.get("trace_id", ""),
+        "notification_type": "auto_commit_blocked_secret_scan",
+        "notification_title": "Claude auto-commit blocked",
+        "notification_message": (
+            "Claude Code auto-commit blocked before git commit: "
+            f"{commit_result.get('error', 'secret scan failed')}"
+        ),
+    }
+
+
+def _send_payload(api_url: str, api_key: str, payload: dict) -> dict:
+    url = f"{api_url}/v1/hooks/claude-code"
+    data = json.dumps(payload).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def _exit_ok():
     """Exit cleanly with valid empty JSON so Claude Code doesn't report validation errors."""
     print("{}")
@@ -829,13 +869,15 @@ def main():
         _exit_ok()
 
     cwd = event_data.get("cwd") or os.getcwd()
+    auto_commit_result = None
 
     # --- Auto-commit (no API key needed, pure git) ---
     if event_type in ("Stop", "SubagentStop", "TaskCompleted"):
         if not event_data.get("stop_hook_active", False):
             arh_settings = _read_arh_settings(cwd)
             if arh_settings.get("project_id") and arh_settings.get("auto_commit", True):
-                _auto_commit_and_push(cwd, event_data, event_type)
+                auto_commit_result = hc.auto_commit_and_push(Path(cwd), event_data, event_type)
+                event_data["_arh_auto_commit_result"] = auto_commit_result
 
     # --- API reporting (requires API key) ---
     api_url = os.environ.get("ARH_API_URL", "https://api.airesearcherhub.com")
@@ -854,53 +896,53 @@ def main():
 
     # Send to backend
     try:
-        url = f"{api_url}/v1/hooks/claude-code"
-        data = json.dumps(payload).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}",
-        }
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+        result = _send_payload(api_url, api_key, payload)
 
-            # Persist project_id for SessionStart if newly known.
-            if event_type == "SessionStart" and result.get("project_id"):
-                arh_settings = _read_arh_settings(cwd)
-                if not arh_settings.get("project_id"):
-                    arh_settings["project_id"] = result["project_id"]
-                    _write_arh_settings(cwd, arh_settings)
+        if auto_commit_result:
+            notification = _auto_commit_notification_payload(payload, auto_commit_result)
+            if notification:
+                try:
+                    _send_payload(api_url, api_key, notification)
+                except (urllib.error.URLError, OSError, json.JSONDecodeError):
+                    pass
 
-            # Emit agent-visible context based on what the event schema allows.
-            lines: list[str] = []
-            if event_type == "SessionStart" and result.get("project_id"):
-                status = result.get("status", "")
-                label = "reused" if "reused" in status else "created"
-                lines.append(
-                    f"Research project {label}: {result['project_id']} — "
-                    f"{result.get('title', 'Untitled')}"
-                )
-            nudge = result.get("nudge")
-            if nudge:
-                lines.append(nudge)
+        # Persist project_id for SessionStart if newly known.
+        if event_type == "SessionStart" and result.get("project_id"):
+            arh_settings = _read_arh_settings(cwd)
+            if not arh_settings.get("project_id"):
+                arh_settings["project_id"] = result["project_id"]
+                _write_arh_settings(cwd, arh_settings)
 
-            if lines:
-                text = "\n".join(lines)
-                # SessionStart / UserPromptSubmit / PostToolUse accept
-                # hookSpecificOutput.additionalContext (injected into agent
-                # context). Stop / SubagentStop do not — use top-level
-                # systemMessage (surfaced to the user) instead. This keeps
-                # the handler schema-compliant for every event type.
-                if event_type in ("SessionStart", "UserPromptSubmit", "PostToolUse"):
-                    output = {
-                        "hookSpecificOutput": {
-                            "hookEventName": event_type,
-                            "additionalContext": text,
-                        }
+        # Emit agent-visible context based on what the event schema allows.
+        lines: list[str] = []
+        if event_type == "SessionStart" and result.get("project_id"):
+            status = result.get("status", "")
+            label = "reused" if "reused" in status else "created"
+            lines.append(
+                f"Research project {label}: {result['project_id']} — "
+                f"{result.get('title', 'Untitled')}"
+            )
+        nudge = result.get("nudge")
+        if nudge:
+            lines.append(nudge)
+
+        if lines:
+            text = "\n".join(lines)
+            # SessionStart / UserPromptSubmit / PostToolUse accept
+            # hookSpecificOutput.additionalContext (injected into agent
+            # context). Stop / SubagentStop do not — use top-level
+            # systemMessage (surfaced to the user) instead. This keeps
+            # the handler schema-compliant for every event type.
+            if event_type in ("SessionStart", "UserPromptSubmit", "PostToolUse"):
+                output = {
+                    "hookSpecificOutput": {
+                        "hookEventName": event_type,
+                        "additionalContext": text,
                     }
-                else:
-                    output = {"systemMessage": text}
-                print(json.dumps(output))
+                }
+            else:
+                output = {"systemMessage": text}
+            print(json.dumps(output))
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
         # Silently fail — don't block Claude
         pass

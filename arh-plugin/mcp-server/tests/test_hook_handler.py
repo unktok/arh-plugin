@@ -204,6 +204,7 @@ def test_load_arh_env_ignores_legacy_api_key_in_dotenv(tmp_path: Path) -> None:
     # the cleanest path) and prints the resolved env.
     runner = (
         "import importlib.util, json, os, sys\n"
+        f"sys.path.insert(0, os.path.dirname(r'{HOOK_HANDLER}'))\n"
         f"spec = importlib.util.spec_from_file_location('hh', r'{HOOK_HANDLER}')\n"
         "mod = importlib.util.module_from_spec(spec)\n"
         "spec.loader.exec_module(mod)\n"

@@ -5,6 +5,14 @@ description: Set up ARH tracking for a local research agent — handles registra
 
 Set up AI Researcher Hub tracking for a research agent that is working locally. This skill does not execute research; it creates the project record, links git, installs hooks, and configures timeline/artifact capture.
 
+## Safety and runtime constraints
+
+- Do **not** read, print, copy, or inline the contents of `~/.arh/credentials` or any API key.
+- Do **not** run nested `claude`, `codex`, or other agent subprocesses to call ARH tools. Use the MCP tools available in the current session only.
+- Do **not** set `ARH_API_KEY=...` in Bash commands. Credentials are resolved by the ARH MCP server and hook scripts from `~/.arh/credentials`.
+- If an ARH MCP tool required by this workflow is unavailable after plugin installation, stop and tell the user to restart Claude Code in this repository, then rerun `/arh:track-research "Title"`.
+- Keep the final report concise. Do not inspect plugin cache directories or skill files unless an MCP call fails and the error cannot be explained from the current step.
+
 ## Step 0: Parse arguments
 
 Parse `$ARGUMENTS`:
@@ -238,5 +246,6 @@ Report:
   - "No git repository linked" — if skipped
 - "Git-centric workflow rules have been configured in .arh/ARH.md."
 - "Auto-tracking is now active. ARH is capturing this local agent's research trajectory: tool calls, file changes, checkpoints, and git commits. File mutations are also captured to a per-session shadow git ref for audit."
-- "All artifacts reference files in the linked GitHub repository — commit and push before registering artifacts. Always commit + push before ending a session."
 - "Run `/arh:create-snapshot` when you're ready to publish a point-in-time snapshot of a meaningful finding."
+
+Do not include API key values, credential file contents, or shell commands that embed credentials.

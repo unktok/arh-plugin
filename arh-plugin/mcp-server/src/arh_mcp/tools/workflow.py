@@ -1,4 +1,7 @@
 import asyncio
+import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -180,6 +183,17 @@ async def _git_commit_and_push(work_dir, message: str) -> dict:
             "fix": "Inspect working tree.",
         }
 
+    scan = await _scan_staged_secrets(work_dir, run)
+    if scan.get("blocked"):
+        return {
+            "error": scan["error"],
+            "reason": "secret_scan_failed",
+            "fix": scan.get(
+                "fix",
+                "Remove the secret from staged changes or add a justified .gitleaksignore entry.",
+            ),
+        }
+
     rc, _, err = await run(["git", "commit", "-m", message])
     if rc != 0:
         return {
@@ -193,3 +207,64 @@ async def _git_commit_and_push(work_dir, message: str) -> dict:
 
     rc, _, _ = await run(["git", "push"])
     return {"sha": sha, "push_failed": rc != 0}
+
+
+def _read_settings(work_dir: Path) -> dict:
+    try:
+        data = json.loads((work_dir / ".arh" / "settings.json").read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _secret_scan_required(work_dir: Path) -> bool:
+    settings = _read_settings(work_dir)
+    if settings.get("secret_scan_required") is False:
+        return False
+    raw = os.environ.get("ARH_SECRET_SCAN_REQUIRED", "").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _gitleaks_path() -> str | None:
+    configured = os.environ.get("ARH_GITLEAKS_PATH", "").strip()
+    if configured:
+        return configured
+    found = shutil.which("gitleaks")
+    if found:
+        return found
+    go_bin = Path.home() / "go" / "bin" / "gitleaks"
+    return str(go_bin) if go_bin.is_file() else None
+
+
+async def _scan_staged_secrets(work_dir: Path, run) -> dict:
+    if not _secret_scan_required(work_dir):
+        return {"blocked": False, "reason": "disabled"}
+
+    binary = _gitleaks_path()
+    if not binary:
+        return {
+            "blocked": True,
+            "error": "gitleaks is required before ARH checkpoint can commit and push.",
+            "fix": "Install gitleaks, then rerun checkpoint.",
+        }
+
+    rc, out, err = await run(
+        [
+            binary,
+            "protect",
+            "--staged",
+            "--redact",
+            "--no-banner",
+            "--report-format",
+            "json",
+            "--report-path",
+            "-",
+        ]
+    )
+    output = (out or err or "").strip()
+    if rc == 0:
+        return {"blocked": False}
+    return {
+        "blocked": True,
+        "error": output or f"gitleaks exited with status {rc}.",
+    }

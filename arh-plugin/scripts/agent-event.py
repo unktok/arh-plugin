@@ -12,10 +12,10 @@ import argparse
 import json
 import os
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
+
+import harness_common as hc
 
 
 DEFAULT_API_URL = "https://api.airesearcherhub.com"
@@ -52,6 +52,7 @@ def _load_context(cwd: Path) -> dict[str, str]:
     creds = _read_json_file(Path.home() / ".arh" / "credentials")
     project_env = _read_env_file(cwd / ".arh" / ".env")
     project_settings = _read_json_file(cwd / ".arh" / "settings.json")
+    trace_file = _read_json_file(cwd / ".arh-trace")
 
     context = {
         "api_url": DEFAULT_API_URL,
@@ -71,6 +72,8 @@ def _load_context(cwd: Path) -> dict[str, str]:
         context["trace_id"] = project_env["ARH_TRACE_ID"]
     if isinstance(project_settings.get("project_id"), str):
         context["project_id"] = project_settings["project_id"]
+    if isinstance(trace_file.get("trace_id"), str):
+        context["trace_id"] = trace_file["trace_id"]
 
     context["api_url"] = os.environ.get("ARH_API_URL", context["api_url"])
     context["api_key"] = os.environ.get("ARH_API_KEY", context["api_key"])
@@ -112,11 +115,21 @@ def _base_payload(args: argparse.Namespace, context: dict[str, str]) -> dict[str
         payload["project_id"] = project_id
     if trace_id:
         payload["trace_id"] = trace_id
+    if args.participant_id:
+        payload["participant_id"] = args.participant_id
     metadata = _parse_json_arg(args.metadata, "--metadata")
     if metadata is not None:
         if not isinstance(metadata, dict):
             raise SystemExit("--metadata must be a JSON object")
         payload["metadata"] = metadata
+    if args.auto_checkpoint_sha:
+        payload["auto_checkpoint_sha"] = args.auto_checkpoint_sha
+    if args.auto_checkpoint_summary:
+        payload["auto_checkpoint_summary"] = args.auto_checkpoint_summary
+    if args.transcript_path:
+        entries = hc.read_new_transcript_entries(Path(args.transcript_path), args.session_id)
+        if entries:
+            payload["transcript_entries"] = entries
     return payload
 
 
@@ -147,11 +160,24 @@ def _build_payload(args: argparse.Namespace, context: dict[str, str]) -> dict[st
             payload["message"] = args.message
         if args.reason:
             payload["stop_reason"] = args.reason
+    elif command == "subagent-stop":
+        if args.message is not None:
+            payload["message"] = args.message
+        if args.subagent_type:
+            payload["subagent_type"] = args.subagent_type
+        if args.subagent_id:
+            payload["subagent_id"] = args.subagent_id
     elif command == "notification":
         payload["notification_type"] = args.notification_type
         payload["notification_message"] = args.message
         if args.title:
             payload["notification_title"] = args.title
+    elif command == "task-completed":
+        payload["message"] = args.message
+        if args.commit_sha:
+            payload["commit_sha"] = args.commit_sha
+        if args.commit_message:
+            payload["commit_message"] = args.commit_message
     return {key: value for key, value in payload.items() if value is not None}
 
 
@@ -160,31 +186,17 @@ def _send_event(api_url: str, api_key: str, payload: dict[str, Any]) -> dict[str
         raise SystemExit(
             "ARH_API_KEY is required. Set it in the environment or ~/.arh/credentials."
         )
-    url = f"{api_url.rstrip('/')}/v1/hooks/agent-event"
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=data,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
+        return hc.send_event(api_url, api_key, payload)
+    except RuntimeError as exc:
         hint = ""
-        if exc.code == 401 and os.environ.get("ARH_API_KEY"):
+        message = str(exc)
+        if "ARH request failed (401)" in message and os.environ.get("ARH_API_KEY"):
             hint = (
                 " ARH_API_KEY from the environment overrides ~/.arh/credentials; "
                 "unset or update it if it is stale."
             )
-        raise SystemExit(f"ARH request failed ({exc.code}): {body}{hint}") from exc
-    except urllib.error.URLError as exc:
-        raise SystemExit(f"ARH request failed: {exc.reason}") from exc
+        raise SystemExit(f"{message}{hint}") from exc
 
 
 def _add_common(parser: argparse.ArgumentParser, event_name: str) -> None:
@@ -193,8 +205,12 @@ def _add_common(parser: argparse.ArgumentParser, event_name: str) -> None:
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--project-id", default="")
     parser.add_argument("--trace-id", default="")
+    parser.add_argument("--participant-id", default="")
     parser.add_argument("--cwd", default=os.getcwd())
     parser.add_argument("--metadata", help="JSON object to attach to metadata")
+    parser.add_argument("--transcript-path", default="")
+    parser.add_argument("--auto-checkpoint-sha", default="")
+    parser.add_argument("--auto-checkpoint-summary", default="")
     parser.add_argument("--dry-run", action="store_true")
 
 
@@ -224,11 +240,23 @@ def _parser() -> argparse.ArgumentParser:
     stop.add_argument("--message")
     stop.add_argument("--reason")
 
+    subagent = subparsers.add_parser("subagent-stop", help="Record a subagent stop")
+    _add_common(subagent, "subagent_stop")
+    subagent.add_argument("--message")
+    subagent.add_argument("--subagent-type", default="")
+    subagent.add_argument("--subagent-id", default="")
+
     notification = subparsers.add_parser("notification", help="Record a notification")
     _add_common(notification, "notification")
     notification.add_argument("--notification-type", default="info")
     notification.add_argument("--message", required=True)
     notification.add_argument("--title")
+
+    task = subparsers.add_parser("task-completed", help="Record a task completion")
+    _add_common(task, "task_completed")
+    task.add_argument("--message", required=True)
+    task.add_argument("--commit-sha", default="")
+    task.add_argument("--commit-message", default="")
     return parser
 
 

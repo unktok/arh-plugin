@@ -14,10 +14,12 @@ class APIClient:
         self,
         api_key: str = "",
         base_url: str = "",
+        timeout: float | None = None,
     ):
         config = get_config()
         self._base_url = base_url or config.api_base_url
         self._api_key = api_key or config.api_key
+        self._timeout = timeout or config.api_timeout_seconds
         self._sync_client: httpx.Client | None = None
         self._async_client: httpx.AsyncClient | None = None
 
@@ -33,7 +35,7 @@ class APIClient:
             self._sync_client = httpx.Client(
                 base_url=self._base_url,
                 headers=self._headers(),
-                timeout=30.0,
+                timeout=self._timeout,
             )
         return self._sync_client
 
@@ -43,7 +45,7 @@ class APIClient:
             self._async_client = httpx.AsyncClient(
                 base_url=self._base_url,
                 headers=self._headers(),
-                timeout=30.0,
+                timeout=self._timeout,
             )
         return self._async_client
 

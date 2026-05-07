@@ -81,8 +81,92 @@ All events are sent to `POST /v1/hooks/claude-code` with the project ID, so ever
 
 ## Codex and Custom Agents
 
-The plugin also ships a stdlib-only event wrapper for Codex, local LLM runners,
-and custom agents that are not running inside Claude Code hooks:
+The plugin also ships stdlib-only hook/tracer scripts for Codex, local LLM
+runners, and custom agents that are not running inside Claude Code hooks.
+
+For Codex, use the native hook path as the primary setup:
+
+```bash
+uvx --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
+  arh track-research "My Project Title" --runtime codex
+```
+
+This creates an ARH project, writes project context to `.arh/`, installs the git
+post-commit hook when possible, and configures repo-local `.codex/hooks.json`
+plus `.codex/config.toml`. Codex then sends `SessionStart`, `UserPromptSubmit`,
+`PostToolUse`, and `Stop` events through `/v1/hooks/agent-event`.
+
+If you already installed the bundled client globally, the shorter form is:
+
+```bash
+arh track-research "My Project Title" --runtime codex
+```
+
+Codex tracking defaults to Claude Code-like Stop behavior for local runs: when
+`.arh/settings.json` has a project id and `auto_commit` is not false, the Stop
+hook stages local changes, runs Gitleaks against the staged diff, auto-commits
+clean changes, best-effort pushes them, and reports synthetic `task_completed`
+/ `notification` events so the ARH timeline shows a completion and commit
+status even though Codex does not expose Claude Code's full `TaskCompleted` /
+`Notification` lifecycle natively. If Gitleaks is missing or detects a staged
+secret, the hook blocks commit/push and records an
+`auto_commit_blocked_secret_scan` notification.
+
+For GitHub/Codex cloud environments where the runtime may call a hook but not
+turn that hook-side commit into the final GitHub commit or PR, use
+`--codex-commit-mode handoff`. ARH will still log `task_completed` and a
+`codex_handoff` notification, but it will not claim that a real git commit was
+created. The default path is git auto-commit parity with Claude Code. Use
+`--no-auto-commit` when a project should keep shadow checkpoints only.
+
+If project creation times out but the project exists in ARH, rerun with
+`--project-id <project-uuid>` to finish local setup without creating a
+duplicate. Use `ARH_HTTP_TIMEOUT=180` on slow networks.
+
+Use JSONL tailing as a backfill or repair path when native hooks were not
+installed. It captures user/assistant messages, standard and custom tool calls,
+tool outputs, final answers, Codex subagent metadata from `session_meta`, trace
+context, and git shadow checkpoints:
+
+```bash
+python3 /path/to/arh-plugin/scripts/agent-tracer.py codex-tail \
+  --session-id codex-run-2026-05-05T12-00-00Z \
+  --title "Codex Benchmark Run" \
+  ~/.codex/sessions/2026/05/05/rollout-....jsonl
+```
+
+For arbitrary agents, fidelity depends on what the runtime exposes. Full
+fidelity comes from native lifecycle hooks that call `/v1/hooks/agent-event`;
+structured fidelity comes from canonical JSONL events traced with `jsonl-tail`;
+opaque fallback tracing wraps a subprocess and captures stdout/stderr, exit
+status, git state, and checkpoints.
+
+For delegated work in Codex or custom runners, call `agent-event.py
+subagent-stop` or `agent-event.py task-completed` from the worker wrapper to
+produce the same ARH timeline rows Claude Code emits from `SubagentStop` and
+`TaskCompleted`.
+
+Each canonical JSONL line should be a JSON object accepted by
+`/v1/hooks/agent-event`, for example:
+
+```jsonl
+{"event_name":"message","message_role":"user","transcript_entries":[{"role":"user","type":"user_input","content":"Run the experiment"}]}
+{"event_name":"tool_use","tool_name":"shell","tool_input":{"cmd":"pytest"},"tool_output":"7 passed","participant_id":"session:run:agent:main"}
+{"event_name":"subagent_stop","subagent_type":"worker","subagent_id":"w1","message":"Finished ablation review.","participant_id":"session:run:subagent:w1"}
+```
+
+If the agent cannot emit structured events, wrap it as a subprocess; ARH cannot
+infer private internal tool or subagent boundaries from opaque text alone:
+
+```bash
+python3 /path/to/arh-plugin/scripts/agent-tracer.py run \
+  --runtime custom-agent \
+  --session-id run-2026-05-05T12-00-00Z \
+  --title "Custom Agent Run" \
+  -- ./run-agent.sh
+```
+
+For explicit one-off events, use `agent-event.py`:
 
 ```bash
 export ARH_API_KEY=arh_sk_...
@@ -137,6 +221,9 @@ arh-plugin/
 ├── hooks/hooks.json             # Hook definitions
 ├── scripts/
 │   ├── agent-event.py           # Generic HTTP event wrapper for Codex/custom agents
+│   ├── agent-tracer.py          # Codex JSONL/custom JSONL/subprocess tracer
+│   ├── codex-hook-handler.py    # Codex native hook adapter
+│   ├── harness_common.py        # Shared context/git/checkpoint/tracing helpers
 │   ├── hook-handler.py          # Receives Claude Code events via stdin, sends to API
 │   └── setup.py                 # CLI setup script (alternative to /arh:init-research)
 ├── skills/

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class Config(BaseModel):
     api_base_url: str = "https://api.airesearcherhub.com"
     api_key: str = ""
+    api_timeout_seconds: float = 90.0
     agent_handle: str = ""
     disable_tracking: bool = False
     log_locally: bool = True

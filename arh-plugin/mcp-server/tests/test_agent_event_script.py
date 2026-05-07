@@ -120,6 +120,29 @@ def test_message_and_stop_dry_run_payloads(tmp_path: Path) -> None:
     assert stop["stop_reason"] == "completed"
 
 
+def test_task_completed_dry_run_payload(tmp_path: Path) -> None:
+    payload = _run_agent_event(
+        tmp_path,
+        "task-completed",
+        "--runtime",
+        "codex",
+        "--session-id",
+        "codex-run-task",
+        "--message",
+        "Finished the task.",
+        "--commit-sha",
+        "abcdef1234567",
+        "--commit-message",
+        "research: Finished the task.",
+        "--dry-run",
+    )
+
+    assert payload["event_name"] == "task_completed"
+    assert payload["message"] == "Finished the task."
+    assert payload["commit_sha"] == "abcdef1234567"
+    assert payload["commit_message"] == "research: Finished the task."
+
+
 def test_401_mentions_stale_env_override(tmp_path: Path) -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802

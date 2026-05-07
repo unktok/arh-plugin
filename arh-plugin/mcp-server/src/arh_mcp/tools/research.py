@@ -79,9 +79,12 @@ def register(mcp):
                 "tag": "research_step",
             }
             logs.append(log)
-        return await arh_client.post(
+        result = await arh_client.post(
             f"/v1/research/projects/{project_id}/logs/batch", json={"logs": logs}
         )
+        if isinstance(result, list):
+            return {"logs": result, "count": len(result)}
+        return result
 
     @mcp.tool()
     async def upload_artifact(

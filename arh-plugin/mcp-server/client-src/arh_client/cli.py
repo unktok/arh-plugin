@@ -1,9 +1,13 @@
 import argparse
 import json
 import os
+import shlex
+import shutil
+import subprocess
 import sys
 import time
 
+import httpx
 from dotenv import load_dotenv
 
 
@@ -13,13 +17,39 @@ def _get_client():
 
     load_dotenv()
 
-    api_key = os.environ.get("ARH_API_KEY", "")
-    api_url = os.environ.get("ARH_API_URL", "https://api.airesearcherhub.com")
+    creds = _read_credentials()
+    api_key = os.environ.get("ARH_API_KEY", creds.get("api_key", ""))
+    api_url = os.environ.get(
+        "ARH_API_URL",
+        creds.get("api_url", "https://api.airesearcherhub.com"),
+    )
+    timeout = _api_timeout_seconds()
 
     if api_key or api_url:
-        configure(api_key=api_key, api_base_url=api_url)
+        configure(api_key=api_key, api_base_url=api_url, api_timeout_seconds=timeout)
 
     return APIClient()
+
+
+def _read_credentials() -> dict:
+    creds_path = os.path.expanduser("~/.arh/credentials")
+    try:
+        if os.path.isfile(creds_path):
+            with open(creds_path) as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        pass
+    return {}
+
+
+def _api_timeout_seconds() -> float:
+    raw = os.environ.get("ARH_HTTP_TIMEOUT", "90")
+    try:
+        value = float(raw)
+    except ValueError:
+        return 90.0
+    return max(value, 1.0)
 
 
 def _print_json(data):
@@ -112,6 +142,33 @@ def cmd_session_start(args):
 # ------------------------------------------------------------------
 
 def cmd_init_research(args):
+    project_id, summary = _run_research_setup(args)
+    _print_research_setup_summary(args, project_id, summary)
+
+    # Output project ID to stdout for scripting
+    print(project_id)
+
+
+def cmd_track_research(args):
+    project_id, summary = _run_research_setup(args)
+    codex_hooks = False
+    if args.runtime == "codex" and not args.no_hooks:
+        try:
+            hook_path, config_path = _install_codex_hooks(os.getcwd())
+            codex_hooks = True
+            print(f"Codex hooks installed: {hook_path}", file=sys.stderr)
+            print(f"Codex hooks enabled:   {config_path}", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: failed to install Codex hooks: {e}", file=sys.stderr)
+
+    summary["codex_hooks"] = codex_hooks
+    _print_research_setup_summary(args, project_id, summary)
+
+    # Output project ID to stdout for scripting
+    print(project_id)
+
+
+def _run_research_setup(args):
     from arh_client.git_tracker import detect_git_info, install_post_commit_hook
 
     client = _get_client()
@@ -124,16 +181,45 @@ def cmd_init_research(args):
         if git_info:
             git_remote, git_branch = git_info
 
-    # 2. Create research project
-    data = {"title": args.title}
-    if args.description:
-        data["description"] = args.description
-    if args.tags:
-        data["tags"] = args.tags
-    project = client.create_project(data)
-    project_id = project["id"]
-
-    print(f"Project created: {project_id}", file=sys.stderr)
+    # 2. Create or reuse research project
+    project_id = getattr(args, "project_id", "") or ""
+    if project_id:
+        print(f"Project reused: {project_id}", file=sys.stderr)
+    else:
+        data = {"title": args.title}
+        if args.description:
+            data["description"] = args.description
+        if args.tags:
+            data["tags"] = args.tags
+        try:
+            project = client.create_project(data)
+        except httpx.TimeoutException as e:
+            print(_project_create_timeout_message(e), file=sys.stderr)
+            sys.exit(1)
+        except httpx.HTTPError as e:
+            print(f"Error: failed to create ARH project: {e}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error: failed to create ARH project: {e}", file=sys.stderr)
+            sys.exit(1)
+        project_id = project["id"]
+        print(f"Project created: {project_id}", file=sys.stderr)
+    creds = _read_credentials()
+    api_url = os.environ.get("ARH_API_URL", creds.get("api_url", "https://api.airesearcherhub.com"))
+    api_key = os.environ.get("ARH_API_KEY", creds.get("api_key", ""))
+    if api_key:
+        _persist_credentials(api_key, api_url)
+    gitleaks_ok, gitleaks_status = _ensure_gitleaks_available()
+    print(f"Gitleaks: {gitleaks_status}", file=sys.stderr)
+    _write_arh_project_context(
+        os.getcwd(),
+        api_url,
+        project_id,
+        runtime=getattr(args, "runtime", ""),
+        auto_commit=not getattr(args, "no_auto_commit", False),
+        codex_commit_mode=getattr(args, "codex_commit_mode", None),
+        secret_scan_required=True,
+    )
 
     # 3. Link git repository
     repo_linked = False
@@ -148,8 +234,6 @@ def cmd_init_research(args):
     # 4. Install post-commit hook
     hook_installed = False
     if repo_linked:
-        api_url = os.environ.get("ARH_API_URL", "https://api.airesearcherhub.com")
-        api_key = os.environ.get("ARH_API_KEY", "")
         try:
             hook_path = install_post_commit_hook(project_id, api_url, api_key)
             if hook_path:
@@ -165,7 +249,8 @@ def cmd_init_research(args):
 
     # 6. Install Claude Code hooks (default: enabled)
     hooks_installed = False
-    if not args.no_hooks:
+    install_claude_hooks = getattr(args, "runtime", "claude") in {"claude", "claude_code"}
+    if not args.no_hooks and install_claude_hooks:
         api_key_for_hooks = os.environ.get("ARH_API_KEY", "")
         api_url_for_hooks = os.environ.get("ARH_API_URL", "https://api.airesearcherhub.com")
         if api_key_for_hooks:
@@ -183,21 +268,44 @@ def cmd_init_research(args):
         else:
             print("Warning: ARH_API_KEY not set, skipping hooks install", file=sys.stderr)
 
-    # 7. Summary
-    print(f"\n--- Research Project Summary ---", file=sys.stderr)
+    summary = {
+        "git_remote": git_remote,
+        "git_branch": git_branch,
+        "repo_linked": repo_linked,
+        "git_hook": hook_installed,
+        "claude_hooks": hooks_installed,
+        "gitleaks": gitleaks_ok,
+        "gitleaks_status": gitleaks_status,
+    }
+    return project_id, summary
+
+
+def _print_research_setup_summary(args, project_id: str, summary: dict):
+    print("\n--- Research Project Summary ---", file=sys.stderr)
     print(f"  Project ID: {project_id}", file=sys.stderr)
     print(f"  Title:      {args.title}", file=sys.stderr)
-    if repo_linked:
-        print(f"  Git Repo:   {git_remote}", file=sys.stderr)
-        print(f"  Branch:     {git_branch}", file=sys.stderr)
-    print(f"  Git Hook:   {'installed' if hook_installed else 'not installed'}", file=sys.stderr)
+    if summary.get("repo_linked"):
+        print(f"  Git Repo:   {summary.get('git_remote')}", file=sys.stderr)
+        print(f"  Branch:     {summary.get('git_branch')}", file=sys.stderr)
+    print(f"  Git Hook:   {'installed' if summary.get('git_hook') else 'not installed'}", file=sys.stderr)
+    print(f"  Gitleaks:   {summary.get('gitleaks_status', 'not checked')}", file=sys.stderr)
     if args.watch_dir:
         print(f"  Watch Dir:  {os.path.abspath(args.watch_dir)}", file=sys.stderr)
-    print(f"  CC Hooks:   {'installed' if hooks_installed else 'skipped'}", file=sys.stderr)
-    print(f"", file=sys.stderr)
+    print(f"  CC Hooks:   {'installed' if summary.get('claude_hooks') else 'skipped'}", file=sys.stderr)
+    if getattr(args, "runtime", "") == "codex":
+        print(f"  Codex Hooks:{' installed' if summary.get('codex_hooks') else ' skipped'}", file=sys.stderr)
+    print("", file=sys.stderr)
 
-    # Output project ID to stdout for scripting
-    print(project_id)
+
+def _project_create_timeout_message(exc: Exception) -> str:
+    timeout = _api_timeout_seconds()
+    return (
+        f"Error: timed out creating ARH project after {timeout:g}s: {exc}\n"
+        "No local Codex hooks were written because the project ID is unknown.\n"
+        "If the ARH project was created server-side despite the timeout, rerun with "
+        "`--project-id <id>` to finish local setup without creating a duplicate. "
+        "You can also raise the client timeout with `ARH_HTTP_TIMEOUT=180`."
+    )
 
 
 # ------------------------------------------------------------------
@@ -271,6 +379,104 @@ def _find_hook_handler() -> str | None:
     return None
 
 
+def _find_codex_hook_handler() -> str | None:
+    """Try to find the plugin's Codex hook handler."""
+    plugin_root = os.environ.get("ARH_PLUGIN_ROOT", "")
+    candidates = [
+        os.path.join(plugin_root, "scripts", "codex-hook-handler.py") if plugin_root else "",
+        os.path.join(os.getcwd(), "arh-plugin", "scripts", "codex-hook-handler.py"),
+        os.path.join(
+            os.path.dirname(
+                os.path.dirname(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                )
+            ),
+            "scripts",
+            "codex-hook-handler.py",
+        ),
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _install_codex_hooks(project_dir: str) -> tuple[str, str]:
+    """Install repo-local Codex hooks for ARH tracking."""
+    hook_handler = _find_codex_hook_handler()
+    if not hook_handler:
+        raise FileNotFoundError("Cannot find arh-plugin/scripts/codex-hook-handler.py")
+
+    codex_dir = os.path.join(project_dir, ".codex")
+    os.makedirs(codex_dir, exist_ok=True)
+    hooks_path = os.path.join(codex_dir, "hooks.json")
+    config_path = os.path.join(codex_dir, "config.toml")
+
+    settings = {}
+    if os.path.exists(hooks_path):
+        with open(hooks_path, "r") as f:
+            settings = json.load(f)
+
+    hooks = settings.get("hooks", {})
+    events = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]
+    for event in events:
+        command = f"python3 {shlex.quote(hook_handler)} {event}"
+        new_entry = {
+            "matcher": ".*",
+            "hooks": [{"type": "command", "command": command}],
+        }
+        existing = hooks.get(event, [])
+        hooks[event] = [
+            entry
+            for entry in existing
+            if not any(
+                "codex-hook-handler.py" in h.get("command", "")
+                for h in entry.get("hooks", [])
+            )
+        ]
+        hooks[event].append(new_entry)
+
+    settings["hooks"] = hooks
+    with open(hooks_path, "w") as f:
+        json.dump(settings, f, indent=2)
+        f.write("\n")
+
+    _enable_codex_hooks_feature(config_path)
+    return hooks_path, config_path
+
+
+def _enable_codex_hooks_feature(config_path: str) -> None:
+    """Enable Codex hooks in project-local config without requiring TOML deps."""
+    if not os.path.exists(config_path):
+        with open(config_path, "w") as f:
+            f.write("[features]\ncodex_hooks = true\n")
+        return
+
+    with open(config_path, "r") as f:
+        lines = f.read().splitlines()
+
+    for i, line in enumerate(lines):
+        if line.strip().startswith("codex_hooks"):
+            lines[i] = "codex_hooks = true"
+            with open(config_path, "w") as f:
+                f.write("\n".join(lines) + "\n")
+            return
+
+    features_idx = next(
+        (i for i, line in enumerate(lines) if line.strip() == "[features]"),
+        None,
+    )
+    if features_idx is not None:
+        lines.insert(features_idx + 1, "codex_hooks = true")
+    else:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(["[features]", "codex_hooks = true"])
+
+    with open(config_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
 def _persist_credentials(api_key: str, api_url: str):
     """Write API credentials to ~/.arh/credentials."""
     global_dir = os.path.expanduser("~/.arh")
@@ -286,7 +492,15 @@ def _persist_credentials(api_key: str, api_url: str):
     return creds_path
 
 
-def _write_arh_project_context(project_dir: str, api_url: str, project_id: str = ""):
+def _write_arh_project_context(
+    project_dir: str,
+    api_url: str,
+    project_id: str = "",
+    runtime: str = "",
+    auto_commit: bool | None = None,
+    codex_commit_mode: str | None = None,
+    secret_scan_required: bool | None = None,
+):
     """Write project-local ARH context without persisting API keys."""
     arh_dir = os.path.join(project_dir, ".arh")
     os.makedirs(arh_dir, exist_ok=True)
@@ -300,9 +514,64 @@ def _write_arh_project_context(project_dir: str, api_url: str, project_id: str =
         f.write("\n".join(lines) + "\n")
     if project_id:
         settings_path = os.path.join(arh_dir, "settings.json")
+        settings = {}
+        if os.path.isfile(settings_path):
+            try:
+                with open(settings_path) as f:
+                    existing = json.load(f)
+                    if isinstance(existing, dict):
+                        settings = existing
+            except (OSError, json.JSONDecodeError):
+                settings = {}
+        settings["project_id"] = project_id
+        if runtime:
+            settings["runtime"] = runtime
+            settings["track_research_version"] = 1
+        if auto_commit is not None:
+            settings["auto_commit"] = auto_commit
+        if codex_commit_mode:
+            settings["codex_commit_mode"] = codex_commit_mode
+        if secret_scan_required is not None:
+            settings["secret_scan_required"] = secret_scan_required
         with open(settings_path, "w") as f:
-            json.dump({"project_id": project_id}, f, indent=2)
+            json.dump(settings, f, indent=2)
             f.write("\n")
+
+
+def _gitleaks_path() -> str:
+    found = shutil.which("gitleaks")
+    if found:
+        return found
+    go_bin = os.path.expanduser("~/go/bin/gitleaks")
+    return go_bin if os.path.isfile(go_bin) else ""
+
+
+def _run_install_command(cmd: list[str]) -> bool:
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        return proc.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def _ensure_gitleaks_available() -> tuple[bool, str]:
+    existing = _gitleaks_path()
+    if existing:
+        return True, f"found: {existing}"
+
+    brew = shutil.which("brew")
+    if brew and _run_install_command([brew, "install", "gitleaks"]):
+        installed = _gitleaks_path()
+        if installed:
+            return True, f"installed with Homebrew: {installed}"
+
+    go = shutil.which("go")
+    if go and _run_install_command([go, "install", "github.com/gitleaks/gitleaks/v8@latest"]):
+        installed = _gitleaks_path()
+        if installed:
+            return True, f"installed with go install: {installed}"
+
+    return False, "not installed; auto-commit will be blocked until gitleaks is available"
 
 
 def _install_hooks_inline(api_key: str, api_url: str, global_install: bool, with_mcp: bool, project_id: str = ""):
@@ -362,7 +631,7 @@ def _install_hooks_inline(api_key: str, api_url: str, global_install: bool, with
     print(f"  API URL: {api_url}", file=sys.stderr)
     print(f"  API Key: stored in {creds_path}", file=sys.stderr)
     print(f"  Events:  {', '.join(events)}", file=sys.stderr)
-    print(f"\nAll future Claude Code sessions will be automatically tracked.", file=sys.stderr)
+    print("\nAll future Claude Code sessions will be automatically tracked.", file=sys.stderr)
 
 
 def cmd_hooks_install(args):
@@ -560,7 +829,27 @@ def main():
     p_init.add_argument("--watch-dir", default=None, help="Directory to watch for file changes")
     p_init.add_argument("--no-hooks", action="store_true", help="Skip Claude Code hooks installation")
     p_init.add_argument("--no-git", action="store_true", help="Skip git auto-detection")
+    p_init.add_argument("--project-id", default="", help="Reuse an existing ARH project ID instead of creating one")
     p_init.set_defaults(func=cmd_init_research)
+
+    # --- track-research ---
+    p_track = subparsers.add_parser("track-research", help="Set up ARH tracking for a local agent runtime")
+    p_track.add_argument("title", help="Project title")
+    p_track.add_argument("--runtime", choices=["codex", "claude", "claude_code"], default="codex", help="Agent runtime to configure")
+    p_track.add_argument("--description", default="", help="Project description")
+    p_track.add_argument("--tags", nargs="*", default=[], help="Project tags")
+    p_track.add_argument("--watch-dir", default=None, help="Directory to watch for file changes")
+    p_track.add_argument("--no-hooks", action="store_true", help="Skip runtime hook installation")
+    p_track.add_argument("--no-git", action="store_true", help="Skip git auto-detection")
+    p_track.add_argument("--no-auto-commit", action="store_true", help="Disable Stop-time auto-commit for this project")
+    p_track.add_argument(
+        "--codex-commit-mode",
+        choices=["git", "handoff"],
+        default=None,
+        help="Codex Stop behavior: create a real git commit, or only log an ARH handoff event",
+    )
+    p_track.add_argument("--project-id", default="", help="Reuse an existing ARH project ID instead of creating one")
+    p_track.set_defaults(func=cmd_track_research)
 
     # --- observe ---
     p_observe = subparsers.add_parser("observe", help="Watch a directory and auto-upload artifacts")
