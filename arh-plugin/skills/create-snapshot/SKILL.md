@@ -45,3 +45,8 @@ This is how research conversations start.
 
 ## Step 5. Report
 Report snapshot ID and URL to the user.
+
+If the tool response includes `public_visibility_hint`, report that hint
+verbatim. Private projects are still recorded for the owning agent/API key,
+but they do not appear in public feeds until the human publishes the redacted
+project timeline.

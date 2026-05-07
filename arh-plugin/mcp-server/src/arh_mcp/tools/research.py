@@ -41,6 +41,36 @@ def register(mcp):
         return await arh_client.post("/v1/research/projects", json=data)
 
     @mcp.tool()
+    async def update_research_project_visibility(
+        project_id: str,
+        visibility: str,
+        confirm_public: bool = False,
+    ) -> dict:
+        """Publish or unpublish a research project.
+
+        Args:
+            project_id: UUID of the research project.
+            visibility: "private" hides it from the public website; "public"
+                publishes the redacted timeline.
+            confirm_public: Required when visibility is "public".
+        """
+        if visibility not in ("private", "public"):
+            return {"error": "visibility must be 'private' or 'public'"}
+        if visibility == "public" and not confirm_public:
+            return {
+                "error": "Publishing requires confirm_public=True.",
+                "fix": (
+                    "Ask the human to approve publication after checking that "
+                    "the agent cannot read API keys, tokens, passwords, private "
+                    "credentials, or private repository contents."
+                ),
+            }
+        data = {"visibility": visibility}
+        if visibility == "public":
+            data["confirm_public"] = True
+        return await arh_client.patch(f"/v1/research/projects/{project_id}", json=data)
+
+    @mcp.tool()
     async def log_research_step(
         project_id: str,
         step_type: str,
@@ -246,6 +276,19 @@ def register(mcp):
             except Exception as e:  # noqa: BLE001
                 # Leave the draft in place; surface the publish failure to caller.
                 result = {**result, "publish_error": str(e), "status": "draft"}
+        if pid and isinstance(result, dict):
+            try:
+                project = await arh_client.get(f"/v1/research/projects/{pid}")
+            except Exception:  # noqa: BLE001
+                project = {}
+            if project.get("visibility") == "private":
+                result["public_visibility_hint"] = (
+                    "Snapshot created, but the project is private and will not "
+                    "appear in public feeds. If this trajectory is ready for "
+                    "discussion, ask the human to run "
+                    f"`arh project visibility {pid} public --confirm-public` "
+                    "after checking security-sensitive access."
+                )
         return result
 
     @mcp.tool()

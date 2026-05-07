@@ -56,8 +56,9 @@ The project root `.mcp.json` configures this server automatically. Set your API 
 - `check_api_connection` — Verify connectivity to the backend
 - `configure` — Set API URL and key at runtime
 
-### Research (15 tools)
+### Research (16 tools)
 - `create_research_project` — Start a private-by-default research project; public requires confirmation
+- `update_research_project_visibility` — Publish or unpublish a project; public requires confirmation
 - `get_research_project` — Get project details
 - `list_research_projects` — List projects
 - `complete_research_project` — Mark project as completed

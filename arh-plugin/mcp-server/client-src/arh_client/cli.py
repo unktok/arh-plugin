@@ -301,7 +301,8 @@ def _print_research_setup_summary(args, project_id: str, summary: dict):
     print("\n--- Research Project Summary ---", file=sys.stderr)
     print(f"  Project ID: {project_id}", file=sys.stderr)
     print(f"  Title:      {args.title}", file=sys.stderr)
-    print(f"  Visibility: {getattr(args, 'visibility', 'private')}", file=sys.stderr)
+    visibility = getattr(args, "visibility", "private")
+    print(f"  Visibility: {visibility}", file=sys.stderr)
     if summary.get("repo_linked"):
         print(f"  Git Repo:   {summary.get('git_remote')}", file=sys.stderr)
         print(f"  Branch:     {summary.get('git_branch')}", file=sys.stderr)
@@ -312,6 +313,20 @@ def _print_research_setup_summary(args, project_id: str, summary: dict):
     print(f"  CC Hooks:   {'installed' if summary.get('claude_hooks') else 'skipped'}", file=sys.stderr)
     if getattr(args, "runtime", "") == "codex":
         print(f"  Codex Hooks:{' installed' if summary.get('codex_hooks') else ' skipped'}", file=sys.stderr)
+    if visibility == "private":
+        print("", file=sys.stderr)
+        print(
+            "  This project is private and will not appear on the public website.",
+            file=sys.stderr,
+        )
+        print(
+            "  To publish the redacted timeline after checking security-sensitive access, run:",
+            file=sys.stderr,
+        )
+        print(
+            f"    arh project visibility {project_id} public --confirm-public",
+            file=sys.stderr,
+        )
     print("", file=sys.stderr)
 
 
@@ -718,6 +733,23 @@ def cmd_project_get(args):
     _print_json(client.get_project(args.project_id))
 
 
+def cmd_project_visibility(args):
+    client = _get_client()
+    if args.visibility == "public" and not args.confirm_public:
+        print(
+            "Error: publishing a project exposes a redacted public timeline. "
+            "Rerun with --confirm-public after checking that the agent cannot "
+            "read API keys, tokens, passwords, private credentials, or private "
+            "repository contents.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    data = {"visibility": args.visibility}
+    if args.visibility == "public":
+        data["confirm_public"] = True
+    _print_json(client.update_project(args.project_id, data))
+
+
 def cmd_log(args):
     client = _get_client()
     data = {"step_type": args.step_type, "title": args.title}
@@ -811,6 +843,18 @@ def main():
     p_proj_get = proj_sub.add_parser("get", help="Get project details")
     p_proj_get.add_argument("project_id", help="Project UUID")
     p_proj_get.set_defaults(func=cmd_project_get)
+
+    p_proj_visibility = proj_sub.add_parser(
+        "visibility", help="Publish or unpublish a research project"
+    )
+    p_proj_visibility.add_argument("project_id", help="Project UUID")
+    p_proj_visibility.add_argument("visibility", choices=["private", "public"])
+    p_proj_visibility.add_argument(
+        "--confirm-public",
+        action="store_true",
+        help="Confirm public projects expose a redacted timeline to anyone on the internet.",
+    )
+    p_proj_visibility.set_defaults(func=cmd_project_visibility)
 
     # --- log ---
     p_log = subparsers.add_parser("log", help="Log a research step")

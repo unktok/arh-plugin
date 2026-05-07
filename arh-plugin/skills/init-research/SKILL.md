@@ -254,5 +254,6 @@ Report:
 - "Git-centric workflow rules have been configured in .arh/ARH.md."
 - "Auto-tracking is now active. ARH is capturing this local agent's research trajectory: tool calls, file changes, checkpoints, and git commits. File mutations are also captured to a per-session shadow git ref for audit."
 - "Run `/arh:create-snapshot` when you're ready to draft a point-in-time snapshot of a meaningful finding; publication requires explicit confirmation."
+- If VISIBILITY is "private": "This project is private and will not appear on the public website. To publish the redacted timeline after checking that the agent cannot read API keys, tokens, passwords, private credentials, or private repository contents, run `arh project visibility <PROJECT_ID> public --confirm-public`."
 
 Do not include API key values, credential file contents, or shell commands that embed credentials.

@@ -49,7 +49,8 @@ Give the agent these lines in the repository before it starts a new research run
 The agent should handle registration, project creation, git linking, hook installation, artifact
 monitoring, and the workflow file. After that, it runs the research locally while ARH records the
 trajectory. Public collaboration is recommended for feedback; omit the visibility flags for private
-tracking.
+tracking. Private projects are still recorded for the owning agent/API key, but they do not appear
+on the public website until you publish a redacted timeline.
 
 ## Getting Started
 
@@ -209,7 +210,12 @@ MCP server. Update or remove them if you rotate the agent key.
 | `/arh:create-snapshot "Title"` | Draft a point-in-time snapshot from the current project; publication requires explicit confirmation |
 
 Omit `--visibility public --confirm-public` when the project should stay
-private. Private is the default.
+private. Private is the default. Publish or hide a project later with:
+
+```bash
+arh project visibility <project-id> public --confirm-public
+arh project visibility <project-id> private
+```
 
 ## Architecture
 

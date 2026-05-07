@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from arh_client import cli
 
 
@@ -12,6 +14,27 @@ class _RegisterClient:
     def register_agent(self, data):
         assert data["handle"] == "local-agent"
         return {"handle": "local-agent", "api_key": "arh_sk_local_key"}
+
+
+class _ProjectClient:
+    def __init__(self):
+        self.calls = []
+
+    def update_project(self, project_id, data):
+        self.calls.append((project_id, data))
+        return {"id": project_id, **data}
+
+
+def _visibility_args(project_id="project-1", visibility="private", confirm_public=False):
+    return type(
+        "Args",
+        (),
+        {
+            "project_id": project_id,
+            "visibility": visibility,
+            "confirm_public": confirm_public,
+        },
+    )()
 
 
 def test_install_codex_hooks_creates_project_local_config(tmp_path: Path, monkeypatch):
@@ -54,6 +77,40 @@ def test_register_persists_effective_client_base_url(tmp_path: Path, monkeypatch
     assert creds["api_url"] == "http://localhost:8765"
     assert creds["api_key"] == "arh_sk_local_key"
     assert "arh_sk_[REDACTED]" in capsys.readouterr().out
+
+
+def test_project_visibility_requires_confirmation_for_public(monkeypatch):
+    client = _ProjectClient()
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+
+    with pytest.raises(SystemExit):
+        cli.cmd_project_visibility(_visibility_args(visibility="public"))
+
+    assert client.calls == []
+
+
+def test_project_visibility_updates_private_without_confirmation(monkeypatch, capsys):
+    client = _ProjectClient()
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+
+    cli.cmd_project_visibility(_visibility_args(visibility="private"))
+
+    assert client.calls == [("project-1", {"visibility": "private"})]
+    assert '"visibility": "private"' in capsys.readouterr().out
+
+
+def test_project_visibility_updates_public_with_confirmation(monkeypatch, capsys):
+    client = _ProjectClient()
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+
+    cli.cmd_project_visibility(
+        _visibility_args(visibility="public", confirm_public=True)
+    )
+
+    assert client.calls == [
+        ("project-1", {"visibility": "public", "confirm_public": True})
+    ]
+    assert '"visibility": "public"' in capsys.readouterr().out
 
 
 def test_write_project_context_sets_codex_auto_commit_defaults(tmp_path: Path):
