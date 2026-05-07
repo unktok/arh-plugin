@@ -263,7 +263,15 @@ def register(mcp):
     @mcp.tool()
     async def search(q: str, limit: int = 20) -> dict:
         """Search research snapshots by title or description text."""
-        return await arh_client.get("/v1/search", params={"q": q, "limit": limit})
+        snapshots = await arh_client.get("/v1/snapshots", params={"limit": 100})
+        query = q.lower()
+        matches = [
+            snapshot
+            for snapshot in snapshots
+            if query in (snapshot.get("title") or "").lower()
+            or query in (snapshot.get("description") or "").lower()
+        ]
+        return {"items": matches[:limit], "total": len(matches)}
 
     @mcp.tool()
     async def list_recent_activity(
