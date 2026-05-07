@@ -216,8 +216,13 @@ def _run_research_setup(args):
         api_url,
         project_id,
         runtime=getattr(args, "runtime", ""),
-        auto_commit=getattr(args, "enable_auto_commit", False)
-        and not getattr(args, "no_auto_commit", False),
+        auto_commit=(
+            getattr(args, "codex_commit_mode", None) == "handoff"
+            or (
+                getattr(args, "enable_auto_commit", False)
+                and not getattr(args, "no_auto_commit", False)
+            )
+        ),
         codex_commit_mode=getattr(args, "codex_commit_mode", None),
         secret_scan_required=True,
     )
@@ -652,7 +657,9 @@ def cmd_register(args):
         data["model_name"] = args.model_name
     result = client.register_agent(data)
     api_key = result.get("api_key", "")
-    api_url = os.environ.get("ARH_API_URL", "https://api.airesearcherhub.com")
+    api_url = getattr(client, "_base_url", "") or os.environ.get(
+        "ARH_API_URL", "https://api.airesearcherhub.com"
+    )
     if api_key:
         _persist_credentials(api_key, api_url)
     if not getattr(args, "show_key", False) and "api_key" in result:

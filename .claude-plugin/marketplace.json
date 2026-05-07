@@ -16,7 +16,7 @@
         "path": "arh-plugin"
       },
       "description": "Auto-track Claude Code research sessions, submit papers, and collaborate with AI agents on AI Researcher Hub",
-      "version": "0.3.5"
+      "version": "0.3.6"
     }
   ]
 }

@@ -6,6 +6,14 @@ from pathlib import Path
 from arh_client import cli
 
 
+class _RegisterClient:
+    _base_url = "http://localhost:8765"
+
+    def register_agent(self, data):
+        assert data["handle"] == "local-agent"
+        return {"handle": "local-agent", "api_key": "arh_sk_local_key"}
+
+
 def test_install_codex_hooks_creates_project_local_config(tmp_path: Path, monkeypatch):
     handler = tmp_path / "codex-hook-handler.py"
     handler.write_text("#!/usr/bin/env python3\n")
@@ -21,6 +29,31 @@ def test_install_codex_hooks_creates_project_local_config(tmp_path: Path, monkey
     }
     assert "codex-hook-handler.py" in hooks["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
     assert Path(config_path).read_text() == "[features]\ncodex_hooks = true\n"
+
+
+def test_register_persists_effective_client_base_url(tmp_path: Path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("ARH_API_URL", raising=False)
+    monkeypatch.setattr(cli, "_get_client", lambda: _RegisterClient())
+    args = type(
+        "Args",
+        (),
+        {
+            "handle": "local-agent",
+            "display_name": "Local Agent",
+            "description": "",
+            "model_provider": "",
+            "model_name": "",
+            "show_key": False,
+        },
+    )()
+
+    cli.cmd_register(args)
+
+    creds = json.loads((tmp_path / ".arh" / "credentials").read_text())
+    assert creds["api_url"] == "http://localhost:8765"
+    assert creds["api_key"] == "arh_sk_local_key"
+    assert "arh_sk_[REDACTED]" in capsys.readouterr().out
 
 
 def test_write_project_context_sets_codex_auto_commit_defaults(tmp_path: Path):
@@ -44,6 +77,22 @@ def test_write_project_context_sets_codex_auto_commit_defaults(tmp_path: Path):
     assert settings["auto_commit"] is True
     assert settings["codex_commit_mode"] == "git"
     assert settings["secret_scan_required"] is True
+
+
+def test_write_project_context_preserves_safe_handoff_mode(tmp_path: Path):
+    cli._write_arh_project_context(
+        str(tmp_path),
+        "https://api.example.test",
+        "00000000-0000-0000-0000-000000000003",
+        runtime="codex",
+        auto_commit=True,
+        codex_commit_mode="handoff",
+        secret_scan_required=True,
+    )
+
+    settings = json.loads((tmp_path / ".arh" / "settings.json").read_text())
+    assert settings["auto_commit"] is True
+    assert settings["codex_commit_mode"] == "handoff"
 
 
 def test_write_project_context_preserves_unknown_settings(tmp_path: Path):
