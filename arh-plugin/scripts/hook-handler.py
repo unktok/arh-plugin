@@ -875,7 +875,7 @@ def main():
     if event_type in ("Stop", "SubagentStop", "TaskCompleted"):
         if not event_data.get("stop_hook_active", False):
             arh_settings = _read_arh_settings(cwd)
-            if arh_settings.get("project_id") and arh_settings.get("auto_commit", True):
+            if arh_settings.get("project_id") and arh_settings.get("auto_commit", False):
                 auto_commit_result = hc.auto_commit_and_push(Path(cwd), event_data, event_type)
                 event_data["_arh_auto_commit_result"] = auto_commit_result
 

@@ -291,10 +291,10 @@ def _maybe_auto_commit(cwd: Path, hook: dict[str, Any], event_name: str) -> dict
     settings = hc.read_settings(cwd)
     if not settings.get("project_id"):
         return None
-    if settings.get("auto_commit", True) is False:
-        return None
     if _codex_commit_mode(settings) == "handoff":
         return hc.auto_commit_handoff("codex_handoff_mode")
+    if settings.get("auto_commit", False) is False:
+        return None
     return hc.auto_commit_and_push(cwd, hook, "Stop")
 
 
@@ -390,7 +390,11 @@ def main() -> int:
         return 0
 
     if args.dry_run:
-        print(json.dumps(payloads[0] if len(payloads) == 1 else payloads, indent=2, sort_keys=True))
+        print(
+            hc.redact_text(
+                json.dumps(payloads[0] if len(payloads) == 1 else payloads, indent=2, sort_keys=True)
+            )
+        )
         return 0
 
     send_payloads(payloads, context, cwd, event_name)

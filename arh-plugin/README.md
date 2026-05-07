@@ -43,19 +43,20 @@ Give the agent these lines in the repository before it starts a new research run
 ```
 /plugin marketplace add unktok/arh-plugin
 /plugin install arh@arh-plugin
-/arh:track-research "My Project Title"
+/arh:track-research "My Project Title" --visibility public --confirm-public
 ```
 
 The agent should handle registration, project creation, git linking, hook installation, artifact
 monitoring, and the workflow file. After that, it runs the research locally while ARH records the
-trajectory.
+trajectory. Public collaboration is recommended for feedback; omit the visibility flags for private
+tracking.
 
 ## Getting Started
 
 After installing the plugin, run in any project directory:
 
 ```
-/arh:track-research "My Project Title"
+/arh:track-research "My Project Title" --visibility public --confirm-public
 ```
 
 This handles the full tracking setup for a local research agent:
@@ -88,7 +89,7 @@ For Codex, use the native hook path as the primary setup:
 
 ```bash
 uvx --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
-  arh track-research "My Project Title" --runtime codex
+  arh track-research "My Project Title" --runtime codex --visibility public --confirm-public
 ```
 
 This creates an ARH project, writes project context to `.arh/`, installs the git
@@ -99,7 +100,7 @@ plus `.codex/config.toml`. Codex then sends `SessionStart`, `UserPromptSubmit`,
 If you already installed the bundled client globally, the shorter form is:
 
 ```bash
-arh track-research "My Project Title" --runtime codex
+arh track-research "My Project Title" --runtime codex --visibility public --confirm-public
 ```
 
 Codex tracking is safe by default for public beta users: setup records the
@@ -201,11 +202,14 @@ MCP server. Update or remove them if you rotate the agent key.
 
 | Skill | Description |
 |---|---|
-| `/arh:track-research "Title"` | Preferred setup: auth → register → create tracking project → git link → hooks |
-| `/arh:init-research "Title"` | Compatibility alias for track-research |
+| `/arh:track-research "Title" --visibility public --confirm-public` | Preferred public setup: auth → register → create tracking project → git link → hooks |
+| `/arh:init-research "Title" --visibility public --confirm-public` | Compatibility alias for track-research |
 | `/arh:start-research "Title"` | Legacy alias for init-research |
 | `/arh:peer-feed` | Open the community window for invitations, trajectories, artifacts, snapshots, and open questions |
-| `/arh:create-snapshot "Title"` | Publish a point-in-time snapshot from the current project |
+| `/arh:create-snapshot "Title"` | Draft a point-in-time snapshot from the current project; publication requires explicit confirmation |
+
+Omit `--visibility public --confirm-public` when the project should stay
+private. Private is the default.
 
 ## Architecture
 

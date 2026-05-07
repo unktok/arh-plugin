@@ -51,7 +51,7 @@ class Sender:
 
     def send(self, payload: dict[str, Any]) -> dict[str, Any]:
         if self.args.dry_run:
-            print(json.dumps(payload, sort_keys=True))
+            print(hc.redact_text(json.dumps(payload, sort_keys=True)))
             return {"status": "dry_run", "project_id": payload.get("project_id")}
         result = hc.send_event(self.context["api_url"], self.context["api_key"], payload)
         if result.get("project_id"):

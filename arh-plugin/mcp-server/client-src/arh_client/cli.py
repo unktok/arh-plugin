@@ -186,11 +186,22 @@ def _run_research_setup(args):
     if project_id:
         print(f"Project reused: {project_id}", file=sys.stderr)
     else:
+        visibility = getattr(args, "visibility", "private")
+        if visibility == "public" and not getattr(args, "confirm_public", False):
+            print(
+                "Error: --visibility public publishes a redacted project timeline. "
+                "Rerun with --confirm-public after reviewing the risk.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         data = {"title": args.title}
         if args.description:
             data["description"] = args.description
         if args.tags:
             data["tags"] = args.tags
+        data["visibility"] = visibility
+        if visibility == "public":
+            data["confirm_public"] = True
         try:
             project = client.create_project(data)
         except httpx.TimeoutException as e:
@@ -290,6 +301,7 @@ def _print_research_setup_summary(args, project_id: str, summary: dict):
     print("\n--- Research Project Summary ---", file=sys.stderr)
     print(f"  Project ID: {project_id}", file=sys.stderr)
     print(f"  Title:      {args.title}", file=sys.stderr)
+    print(f"  Visibility: {getattr(args, 'visibility', 'private')}", file=sys.stderr)
     if summary.get("repo_linked"):
         print(f"  Git Repo:   {summary.get('git_remote')}", file=sys.stderr)
         print(f"  Branch:     {summary.get('git_branch')}", file=sys.stderr)
@@ -596,7 +608,7 @@ def _install_hooks_inline(api_key: str, api_url: str, global_install: bool, with
     events = ["SessionStart", "PostToolUse", "Stop", "SubagentStop", "Notification"]
 
     for event in events:
-        command = f"python3 {hook_handler} {event}"
+        command = f"python3 {shlex.quote(hook_handler)} {event}"
 
         new_entry = {
             "matcher": {},
@@ -678,11 +690,21 @@ def cmd_me(args):
 
 def cmd_project_create(args):
     client = _get_client()
+    if args.visibility == "public" and not args.confirm_public:
+        print(
+            "Error: --visibility public publishes a redacted project timeline. "
+            "Rerun with --confirm-public after reviewing the risk.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     data = {"title": args.title}
     if args.description:
         data["description"] = args.description
     if args.tags:
         data["tags"] = args.tags
+    data["visibility"] = args.visibility
+    if args.visibility == "public":
+        data["confirm_public"] = True
     _print_json(client.create_project(data))
 
 
@@ -768,6 +790,17 @@ def main():
     p_proj_create.add_argument("title", help="Project title")
     p_proj_create.add_argument("--description", default="")
     p_proj_create.add_argument("--tags", nargs="*", default=[])
+    p_proj_create.add_argument(
+        "--visibility",
+        choices=["private", "public"],
+        default="private",
+        help="Project visibility. Public is recommended for collaboration but requires --confirm-public.",
+    )
+    p_proj_create.add_argument(
+        "--confirm-public",
+        action="store_true",
+        help="Confirm you understand public projects expose a redacted timeline.",
+    )
     p_proj_create.set_defaults(func=cmd_project_create)
 
     p_proj_list = proj_sub.add_parser("list", help="List research projects")
@@ -831,6 +864,17 @@ def main():
     p_init.add_argument("title", help="Project title")
     p_init.add_argument("--description", default="", help="Project description")
     p_init.add_argument("--tags", nargs="*", default=[], help="Project tags")
+    p_init.add_argument(
+        "--visibility",
+        choices=["private", "public"],
+        default="private",
+        help="Project visibility. Public is recommended for collaboration but requires --confirm-public.",
+    )
+    p_init.add_argument(
+        "--confirm-public",
+        action="store_true",
+        help="Confirm you understand public projects expose a redacted timeline.",
+    )
     p_init.add_argument("--watch-dir", default=None, help="Directory to watch for file changes")
     p_init.add_argument("--no-hooks", action="store_true", help="Skip Claude Code hooks installation")
     p_init.add_argument("--no-git", action="store_true", help="Skip git auto-detection")
@@ -843,6 +887,17 @@ def main():
     p_track.add_argument("--runtime", choices=["codex", "claude", "claude_code"], default="codex", help="Agent runtime to configure")
     p_track.add_argument("--description", default="", help="Project description")
     p_track.add_argument("--tags", nargs="*", default=[], help="Project tags")
+    p_track.add_argument(
+        "--visibility",
+        choices=["private", "public"],
+        default="private",
+        help="Project visibility. Public is recommended for collaboration but requires --confirm-public.",
+    )
+    p_track.add_argument(
+        "--confirm-public",
+        action="store_true",
+        help="Confirm you understand public projects expose a redacted timeline.",
+    )
     p_track.add_argument("--watch-dir", default=None, help="Directory to watch for file changes")
     p_track.add_argument("--no-hooks", action="store_true", help="Skip runtime hook installation")
     p_track.add_argument("--no-git", action="store_true", help="Skip git auto-detection")

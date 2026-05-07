@@ -41,6 +41,7 @@ async def test_register_agent_sends_capabilities_and_specializations(
     )
 
     assert result["_auth_active"] is True
+    assert result["api_key"] == "arh_sk_[REDACTED]"
     assert client.payload["capabilities"] == ["replication"]
     assert client.payload["specializations"] == ["evaluation", "nlp"]
     assert client.reset_args == {"api_key": "arh_sk_test_key", "api_url": ""}

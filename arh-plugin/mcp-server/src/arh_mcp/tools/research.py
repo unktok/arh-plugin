@@ -7,6 +7,8 @@ def register(mcp):
         title: str,
         description: str = "",
         tags: list[str] | None = None,
+        visibility: str = "private",
+        confirm_public: bool = False,
     ) -> dict:
         """Create a new research project to track an ongoing research effort.
 
@@ -18,12 +20,24 @@ def register(mcp):
             title: Project title
             description: Project description
             tags: Optional list of tags for categorization
+            visibility: "private" by default, or "public" for collaboration.
+            confirm_public: Required when visibility is "public".
         """
+        if visibility not in ("private", "public"):
+            return {"error": "visibility must be 'private' or 'public'"}
+        if visibility == "public" and not confirm_public:
+            return {
+                "error": "Public project creation requires confirm_public=True.",
+                "fix": "Public projects expose a redacted timeline. Ask the human to confirm.",
+            }
         data = {"title": title}
         if description:
             data["description"] = description
         if tags:
             data["tags"] = tags
+        data["visibility"] = visibility
+        if visibility == "public":
+            data["confirm_public"] = True
         return await arh_client.post("/v1/research/projects", json=data)
 
     @mcp.tool()
@@ -171,13 +185,13 @@ def register(mcp):
         title: str,
         summary: str,
         body: str,
-        publish: bool = True,
+        publish: bool = False,
+        confirm_publication: bool = False,
     ) -> dict:
         """Create a research snapshot for a project, documenting findings at a point in time.
 
-        Snapshots are point-in-time published views of ongoing research — by default this tool
-        creates AND publishes in one call so peers can discover it via the feed.
-        Pass `publish=False` only if you need a draft to iterate on before releasing.
+        Snapshots are point-in-time views of ongoing research. They are created
+        as drafts by default; publishing requires explicit human confirmation.
 
         If project_id is empty, falls back to ARH_PROJECT_ID environment variable.
 
@@ -194,8 +208,8 @@ def register(mcp):
             title: Snapshot title (one line).
             summary: 2-4 sentence abstract shown in feed previews.
             body: Full markdown body of the snapshot.
-            publish: If True (default), transitions status to published
-                     immediately. Drafts are not visible in the cross-agent feed.
+            publish: If True, transitions status to published.
+            confirm_publication: Required when publish=True.
         """
         import os
 
@@ -211,6 +225,11 @@ def register(mcp):
                     "detail view."
                 ),
             }
+        if publish and not confirm_publication:
+            return {
+                "error": "Publishing requires confirm_publication=True.",
+                "fix": "Ask the human to approve publication of this snapshot.",
+            }
 
         pid = project_id or os.environ.get("ARH_PROJECT_ID", "")
         data = {"title": title, "description": summary, "body": body}
@@ -221,7 +240,8 @@ def register(mcp):
         if publish and isinstance(result, dict) and result.get("id"):
             try:
                 result = await arh_client.patch(
-                    f"/v1/snapshots/{result['id']}", json={"status": "published"}
+                    f"/v1/snapshots/{result['id']}",
+                    json={"status": "published", "confirm_publication": True},
                 )
             except Exception as e:  # noqa: BLE001
                 # Leave the draft in place; surface the publish failure to caller.

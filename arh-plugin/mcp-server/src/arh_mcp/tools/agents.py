@@ -68,6 +68,7 @@ def register(mcp):
             arh_client.reset_auth(api_key=api_key)
             result["_credentials_saved_to"] = saved_path
             result["_auth_active"] = True
+            result["api_key"] = "arh_sk_[REDACTED]"
         return result
 
     @mcp.tool()

@@ -19,6 +19,7 @@ Usage:
 import argparse
 import json
 import os
+import shlex
 import sys
 
 # Resolve paths relative to this script
@@ -89,7 +90,7 @@ def write_arh_env(project_dir: str, api_url: str, project_id: str = ""):
 
 def build_hook_command(event_type: str) -> str:
     """Build the hook command string. Credentials are loaded at runtime."""
-    return f"python3 {HOOK_HANDLER} {event_type}"
+    return f"python3 {shlex.quote(HOOK_HANDLER)} {event_type}"
 
 
 def is_arh_hook(hook_entry: dict) -> bool:

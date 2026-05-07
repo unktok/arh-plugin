@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import time
 
@@ -88,6 +89,8 @@ def register(mcp):
         title: str = "Untitled Research",
         description: str | None = None,
         tags: list[str] | None = None,
+        visibility: str = "private",
+        confirm_public: bool = False,
         watch_dir: str | None = None,
         include: str | None = None,
         exclude: str | None = None,
@@ -98,10 +101,19 @@ def register(mcp):
             title: Project title
             description: Optional project description
             tags: Optional list of tags
+            visibility: "private" by default, or "public" for collaboration.
+            confirm_public: Required when visibility is "public".
             watch_dir: If provided, start file observer on this directory
             include: Comma-separated glob patterns to include
             exclude: Comma-separated glob patterns to exclude
         """
+        if visibility not in ("private", "public"):
+            return "Error: visibility must be 'private' or 'public'."
+        if visibility == "public" and not confirm_public:
+            return (
+                "Error: public tracking requires confirm_public=True after the "
+                "human approves publication of the redacted timeline."
+            )
         # Create project via API
         result = await arh_client.post(
             "/v1/research/projects",
@@ -110,6 +122,8 @@ def register(mcp):
                 "description": description,
                 "tags": tags or [],
                 "metadata": {"source": "mcp_session"},
+                "visibility": visibility,
+                **({"confirm_public": True} if visibility == "public" else {}),
             },
         )
         project_id = result["id"]
@@ -266,13 +280,13 @@ def register(mcp):
             hooks = settings.get("hooks", {})
 
             for event in events:
-                command = f"python3 {hook_handler} {event}"
+                command = f"python3 {shlex.quote(hook_handler)} {event}"
                 hook_commands = [{"type": "command", "command": command}]
 
                 # For SessionStart, also inject trace context from .arh-trace
                 if event == "SessionStart" and os.path.isfile(inject_trace):
                     hook_commands.insert(
-                        0, {"type": "command", "command": f"bash {inject_trace}"}
+                        0, {"type": "command", "command": f"bash {shlex.quote(inject_trace)}"}
                     )
 
                 new_entry = {

@@ -267,7 +267,7 @@ def main() -> int:
     payload = _build_payload(args, context)
 
     if args.dry_run:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(hc.redact_text(json.dumps(payload, indent=2, sort_keys=True)))
         return 0
 
     result = _send_event(context["api_url"], context["api_key"], payload)

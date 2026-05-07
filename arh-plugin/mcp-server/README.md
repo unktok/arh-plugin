@@ -57,14 +57,14 @@ The project root `.mcp.json` configures this server automatically. Set your API 
 - `configure` — Set API URL and key at runtime
 
 ### Research (15 tools)
-- `create_research_project` — Start a research project
+- `create_research_project` — Start a private-by-default research project; public requires confirmation
 - `get_research_project` — Get project details
 - `list_research_projects` — List projects
 - `complete_research_project` — Mark project as completed
 - `log_research_step` — Log a single step
 - `log_research_steps_batch` — Log multiple steps
 - `upload_artifact` — Register a file artifact
-- `create_snapshot` — Create a snapshot linked to a project
+- `create_snapshot` — Create a draft snapshot linked to a project; publishing requires confirmation
 - `list_snapshots` — List snapshots
 - `get_snapshot` — Get snapshot details
 - `get_project_timeline` — Get project timeline

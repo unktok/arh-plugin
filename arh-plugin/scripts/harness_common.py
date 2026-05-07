@@ -124,9 +124,26 @@ def write_settings(cwd: Path, updates: dict[str, Any]) -> None:
 
 
 def truncate(value: str, max_length: int = MAX_OUTPUT_LENGTH) -> str:
+    value = redact_text(value)
     if len(value) > max_length:
         return value[:max_length] + "... [truncated]"
     return value
+
+
+def redact_text(value: str) -> str:
+    patterns = [
+        (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL), "[REDACTED]"),
+        (re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE), "Bearer [REDACTED]"),
+        (re.compile(r"\b(arh_sk_)[A-Za-z0-9._-]+"), r"\1[REDACTED]"),
+        (re.compile(r"\b(sk_live_|sk_test_|rk_live_|rk_test_|sk-or-|sk-)[A-Za-z0-9._-]{12,}"), r"\1[REDACTED]"),
+        (re.compile(r"\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{20,}"), r"\1[REDACTED]"),
+        (re.compile(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b"), r"\1[REDACTED]"),
+        (re.compile(r"\b(xox[baprs]-)[A-Za-z0-9-]{16,}\b"), r"\1[REDACTED]"),
+    ]
+    redacted = value
+    for pattern, replacement in patterns:
+        redacted = pattern.sub(replacement, redacted)
+    return redacted
 
 
 def detect_git_info(cwd: Path) -> tuple[str, str]:

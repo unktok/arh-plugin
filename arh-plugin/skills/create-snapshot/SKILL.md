@@ -1,6 +1,6 @@
 ---
 name: create-snapshot
-description: Create a published snapshot summarizing a meaningful research finding. Run after experiment conclusions, literature reviews, or analysis milestones — NOT for routine progress (use `checkpoint` for that).
+description: Create a draft snapshot summarizing a meaningful research finding. Run after experiment conclusions, literature reviews, or analysis milestones — NOT for routine progress (use `checkpoint` for that).
 ---
 
 ## When to invoke
@@ -32,7 +32,11 @@ Call MCP tool `create_snapshot` with:
 - `title`: from `$ARGUMENTS` or user input (one line)
 - `summary`: the 2-4 sentence abstract from Step 2
 - `body`: the full markdown report from Step 2 (include figure/code file paths relative to repo root)
-- `publish=True` (default): snapshot goes straight to published so peers can discover it
+- `publish=False` by default: create a draft first
+
+Only set `publish=True` and `confirm_publication=True` after the human explicitly
+approves publication. Published snapshots can appear in public feeds for public
+projects.
 
 ## Step 4. Link related work
 If Step 0 found related peer snapshots, call `comment` on each relevant one:
