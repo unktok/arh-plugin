@@ -216,7 +216,8 @@ def _run_research_setup(args):
         api_url,
         project_id,
         runtime=getattr(args, "runtime", ""),
-        auto_commit=not getattr(args, "no_auto_commit", False),
+        auto_commit=getattr(args, "enable_auto_commit", False)
+        and not getattr(args, "no_auto_commit", False),
         codex_commit_mode=getattr(args, "codex_commit_mode", None),
         secret_scan_required=True,
     )
@@ -251,8 +252,8 @@ def _run_research_setup(args):
     hooks_installed = False
     install_claude_hooks = getattr(args, "runtime", "claude") in {"claude", "claude_code"}
     if not args.no_hooks and install_claude_hooks:
-        api_key_for_hooks = os.environ.get("ARH_API_KEY", "")
-        api_url_for_hooks = os.environ.get("ARH_API_URL", "https://api.airesearcherhub.com")
+        api_key_for_hooks = api_key
+        api_url_for_hooks = api_url
         if api_key_for_hooks:
             try:
                 _install_hooks_inline(
@@ -558,20 +559,7 @@ def _ensure_gitleaks_available() -> tuple[bool, str]:
     existing = _gitleaks_path()
     if existing:
         return True, f"found: {existing}"
-
-    brew = shutil.which("brew")
-    if brew and _run_install_command([brew, "install", "gitleaks"]):
-        installed = _gitleaks_path()
-        if installed:
-            return True, f"installed with Homebrew: {installed}"
-
-    go = shutil.which("go")
-    if go and _run_install_command([go, "install", "github.com/gitleaks/gitleaks/v8@latest"]):
-        installed = _gitleaks_path()
-        if installed:
-            return True, f"installed with go install: {installed}"
-
-    return False, "not installed; auto-commit will be blocked until gitleaks is available"
+    return False, "not installed; install gitleaks before enabling ARH auto-commit"
 
 
 def _install_hooks_inline(api_key: str, api_url: str, global_install: bool, with_mcp: bool, project_id: str = ""):
@@ -663,8 +651,17 @@ def cmd_register(args):
     if args.model_name:
         data["model_name"] = args.model_name
     result = client.register_agent(data)
+    api_key = result.get("api_key", "")
+    api_url = os.environ.get("ARH_API_URL", "https://api.airesearcherhub.com")
+    if api_key:
+        _persist_credentials(api_key, api_url)
+    if not getattr(args, "show_key", False) and "api_key" in result:
+        result = {**result, "api_key": "arh_sk_[REDACTED]"}
     _print_json(result)
-    print(f"\nSave your API key: {result.get('api_key', 'N/A')}", file=sys.stderr)
+    if api_key:
+        print("\nAPI key saved to ~/.arh/credentials", file=sys.stderr)
+        if not getattr(args, "show_key", False):
+            print("Use --show-key only if you need to display the one-time key.", file=sys.stderr)
 
 
 def cmd_me(args):
@@ -749,6 +746,7 @@ def main():
     p_reg.add_argument("--description", default="")
     p_reg.add_argument("--model-provider", default="")
     p_reg.add_argument("--model-name", default="")
+    p_reg.add_argument("--show-key", action="store_true", help="Print the one-time API key")
     p_reg.set_defaults(func=cmd_register)
 
     # --- me ---
@@ -841,7 +839,16 @@ def main():
     p_track.add_argument("--watch-dir", default=None, help="Directory to watch for file changes")
     p_track.add_argument("--no-hooks", action="store_true", help="Skip runtime hook installation")
     p_track.add_argument("--no-git", action="store_true", help="Skip git auto-detection")
-    p_track.add_argument("--no-auto-commit", action="store_true", help="Disable Stop-time auto-commit for this project")
+    p_track.add_argument(
+        "--enable-auto-commit",
+        action="store_true",
+        help="Opt in to Stop-time auto-commit for this project",
+    )
+    p_track.add_argument(
+        "--no-auto-commit",
+        action="store_true",
+        help="Deprecated safety alias; Stop-time auto-commit is disabled by default",
+    )
     p_track.add_argument(
         "--codex-commit-mode",
         choices=["git", "handoff"],

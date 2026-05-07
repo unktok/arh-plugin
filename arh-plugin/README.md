@@ -102,22 +102,17 @@ If you already installed the bundled client globally, the shorter form is:
 arh track-research "My Project Title" --runtime codex
 ```
 
-Codex tracking defaults to Claude Code-like Stop behavior for local runs: when
-`.arh/settings.json` has a project id and `auto_commit` is not false, the Stop
-hook stages local changes, runs Gitleaks against the staged diff, auto-commits
-clean changes, best-effort pushes them, and reports synthetic `task_completed`
-/ `notification` events so the ARH timeline shows a completion and commit
-status even though Codex does not expose Claude Code's full `TaskCompleted` /
-`Notification` lifecycle natively. If Gitleaks is missing or detects a staged
-secret, the hook blocks commit/push and records an
-`auto_commit_blocked_secret_scan` notification.
+Codex tracking is safe by default for public beta users: setup records the
+project context and hooks, but it does not auto-install dependencies and does
+not auto-commit or push local changes. Use `--codex-commit-mode handoff` when
+you want Stop events to log a completion without claiming a durable git commit.
 
-For GitHub/Codex cloud environments where the runtime may call a hook but not
-turn that hook-side commit into the final GitHub commit or PR, use
-`--codex-commit-mode handoff`. ARH will still log `task_completed` and a
-`codex_handoff` notification, but it will not claim that a real git commit was
-created. The default path is git auto-commit parity with Claude Code. Use
-`--no-auto-commit` when a project should keep shadow checkpoints only.
+If you explicitly opt in with `--enable-auto-commit`, the Stop hook stages
+local changes, runs Gitleaks against the staged diff, auto-commits clean
+changes, best-effort pushes them, and records status events. If Gitleaks is
+missing or detects a staged secret, the hook blocks commit/push and records an
+`auto_commit_blocked_secret_scan` notification. ARH does not install Gitleaks
+automatically; install it yourself before enabling auto-commit.
 
 If project creation times out but the project exists in ARH, rerun with
 `--project-id <project-uuid>` to finish local setup without creating a

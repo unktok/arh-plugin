@@ -6,6 +6,10 @@ import httpx
 DEFAULT_API_URL = "https://api.airesearcherhub.com"
 
 
+def _valid_api_key(value: str) -> bool:
+    return value.startswith("arh_sk_") and "${" not in value
+
+
 class ARHApiError(Exception):
     """Error from the AI Researcher Hub API with a safe user-facing message."""
 
@@ -42,7 +46,8 @@ class ARHClient:
 
     def __init__(self):
         self.base_url = os.environ.get("ARH_API_URL", DEFAULT_API_URL)
-        self.api_key = os.environ.get("ARH_API_KEY", "")
+        env_api_key = os.environ.get("ARH_API_KEY", "")
+        self.api_key = env_api_key if _valid_api_key(env_api_key) else ""
         self._client: httpx.AsyncClient | None = None
         self._load_credentials_file()
 
@@ -52,7 +57,7 @@ class ARHClient:
         try:
             with open(creds_path) as f:
                 creds = json.load(f)
-            if not self.api_key and creds.get("api_key"):
+            if not self.api_key and _valid_api_key(creds.get("api_key", "")):
                 self.api_key = creds["api_key"]
             if self.base_url == DEFAULT_API_URL and creds.get("api_url"):
                 self.base_url = creds["api_url"]

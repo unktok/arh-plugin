@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import stat
 
@@ -107,63 +108,98 @@ def _find_git_dir(repo_dir: str) -> str | None:
 
 def _build_hook_script(project_id: str, api_url: str, api_key: str) -> str:
     """Build the shell script snippet for the post-commit hook."""
+    del api_key  # Credentials are resolved at runtime from ~/.arh/credentials.
+    project_id_json = json.dumps(project_id)
+    api_url_json = json.dumps(api_url)
     return f"""{ARH_HOOK_START}
 # Auto-installed by arh-client — records commits to AI Researcher Hub
 (
-  SHA=$(git rev-parse HEAD)
-  SHORT_SHA=$(git rev-parse --short HEAD)
-  MSG=$(git log -1 --pretty=%B | head -1)
-  BRANCH=$(git rev-parse --abbrev-ref HEAD)
-  AUTHOR_NAME=$(git log -1 --pretty=%an)
-  AUTHOR_EMAIL=$(git log -1 --pretty=%ae)
-  COMMITTED_AT=$(git log -1 --pretty=%aI)
+  python3 - <<'PY' > /dev/null 2>&1 || true
+import json
+import subprocess
+import urllib.request
+from pathlib import Path
 
-  # Build files_changed as JSON array of FileChange objects
-  FILES_JSON="["
-  FIRST=1
-  while IFS=$'\\t' read -r status filepath; do
-    [ -z "$filepath" ] && continue
-    case "$status" in
-      A*) st="added" ;;
-      D*) st="deleted" ;;
-      R*) st="renamed" ;;
-      C*) st="copied" ;;
-      *)  st="modified" ;;
-    esac
-    if [ "$FIRST" -eq 1 ]; then FIRST=0; else FILES_JSON="$FILES_JSON,"; fi
-    FILES_JSON="$FILES_JSON{{\\\"path\\\":\\\"$filepath\\\",\\\"status\\\":\\\"$st\\\"}}"
-  done <<DIFFEOF
-$(git diff-tree --no-commit-id -r --name-status HEAD | head -50)
-DIFFEOF
-  FILES_JSON="$FILES_JSON]"
+PROJECT_ID = {project_id_json}
+DEFAULT_API_URL = {api_url_json}
 
-  # Build stats as JSON object
-  ADDS=$(git diff-tree --no-commit-id --numstat -r HEAD | awk '{{a+=$1; d+=$2}} END {{print a+0}}')
-  DELS=$(git diff-tree --no-commit-id --numstat -r HEAD | awk '{{a+=$1; d+=$2}} END {{print d+0}}')
-  TOTAL=$((ADDS + DELS))
-  STATS_JSON="{{\\\"additions\\\":$ADDS,\\\"deletions\\\":$DELS,\\\"total\\\":$TOTAL}}"
 
-  # Escape message for JSON (newlines, quotes, backslashes)
-  MSG_ESCAPED=$(printf '%s' "$MSG" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g' | head -c 500)
+def git(*args):
+    return subprocess.check_output(["git", *args], text=True).strip()
 
-  PAYLOAD=$(cat <<PAYLOAD_EOF
-{{
-  "sha": "$SHA",
-  "message": "$MSG_ESCAPED",
-  "branch": "$BRANCH",
-  "author_name": "$AUTHOR_NAME",
-  "author_email": "$AUTHOR_EMAIL",
-  "committed_at": "$COMMITTED_AT",
-  "files_changed": $FILES_JSON,
-  "stats": $STATS_JSON
+
+def read_credentials():
+    path = Path.home() / ".arh" / "credentials"
+    try:
+        with path.open() as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {{}}
+    return data if isinstance(data, dict) else {{}}
+
+
+def file_status(status):
+    if status.startswith("A"):
+        return "added"
+    if status.startswith("D"):
+        return "deleted"
+    if status.startswith("R"):
+        return "renamed"
+    if status.startswith("C"):
+        return "copied"
+    return "modified"
+
+
+creds = read_credentials()
+api_key = creds.get("api_key") or ""
+api_url = (creds.get("api_url") or DEFAULT_API_URL).rstrip("/")
+if not api_key:
+    raise SystemExit(0)
+
+files_changed = []
+for line in subprocess.check_output(
+    ["git", "diff-tree", "--no-commit-id", "-r", "--name-status", "HEAD"],
+    text=True,
+).splitlines()[:50]:
+    parts = line.split("\\t")
+    if len(parts) < 2:
+        continue
+    status, path = parts[0], parts[-1]
+    files_changed.append({{"path": path, "status": file_status(status)}})
+
+additions = 0
+deletions = 0
+for line in subprocess.check_output(
+    ["git", "diff-tree", "--no-commit-id", "--numstat", "-r", "HEAD"],
+    text=True,
+).splitlines():
+    parts = line.split("\\t")
+    if len(parts) >= 2:
+        additions += int(parts[0]) if parts[0].isdigit() else 0
+        deletions += int(parts[1]) if parts[1].isdigit() else 0
+
+payload = {{
+    "sha": git("rev-parse", "HEAD"),
+    "message": git("log", "-1", "--pretty=%B")[:500],
+    "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
+    "author_name": git("log", "-1", "--pretty=%an"),
+    "author_email": git("log", "-1", "--pretty=%ae"),
+    "committed_at": git("log", "-1", "--pretty=%aI"),
+    "files_changed": files_changed,
+    "stats": {{"additions": additions, "deletions": deletions, "total": additions + deletions}},
 }}
-PAYLOAD_EOF
-  )
-
-  curl -s -X POST "{api_url}/v1/research/projects/{project_id}/commits" \\
-    -H "Content-Type: application/json" \\
-    -H "Authorization: Bearer {api_key}" \\
-    -d "$PAYLOAD" > /dev/null 2>&1 || true
+body = json.dumps(payload).encode("utf-8")
+request = urllib.request.Request(
+    f"{{api_url}}/v1/research/projects/{{PROJECT_ID}}/commits",
+    data=body,
+    headers={{
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {{api_key}}",
+    }},
+    method="POST",
+)
+urllib.request.urlopen(request, timeout=10).read()
+PY
 ) &
 {ARH_HOOK_END}
 """

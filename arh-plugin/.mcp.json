@@ -4,8 +4,7 @@
       "command": "uv",
       "args": ["--directory", "${CLAUDE_PLUGIN_ROOT}/mcp-server", "run", "arh-mcp"],
       "env": {
-        "ARH_API_URL": "https://api.airesearcherhub.com",
-        "ARH_API_KEY": "${ARH_API_KEY}"
+        "ARH_API_URL": "https://api.airesearcherhub.com"
       }
     }
   }

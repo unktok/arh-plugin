@@ -59,6 +59,10 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def _valid_api_key(value: str) -> bool:
+    return value.startswith("arh_sk_") and "${" not in value
+
+
 def load_context(cwd: Path) -> dict[str, str]:
     creds = read_json_file(Path.home() / ".arh" / "credentials")
     project_env = read_env_file(cwd / ".arh" / ".env")
@@ -87,7 +91,9 @@ def load_context(cwd: Path) -> dict[str, str]:
         context["trace_id"] = trace_file["trace_id"]
 
     context["api_url"] = os.environ.get("ARH_API_URL", context["api_url"])
-    context["api_key"] = os.environ.get("ARH_API_KEY", context["api_key"])
+    env_api_key = os.environ.get("ARH_API_KEY", "")
+    if _valid_api_key(env_api_key):
+        context["api_key"] = env_api_key
     context["project_id"] = os.environ.get("ARH_PROJECT_ID", context["project_id"])
     context["trace_id"] = os.environ.get("ARH_TRACE_ID", context["trace_id"])
     return context
@@ -533,6 +539,11 @@ def send_event(api_url: str, api_key: str, payload: dict[str, Any]) -> dict[str,
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        if exc.code == 401 and os.environ.get("ARH_API_KEY"):
+            body = (
+                f"{body} If you recently rotated credentials, unset stale "
+                "ARH_API_KEY so ~/.arh/credentials can be used."
+            )
         raise RuntimeError(f"ARH request failed ({exc.code}): {body}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"ARH request failed: {exc.reason}") from exc
