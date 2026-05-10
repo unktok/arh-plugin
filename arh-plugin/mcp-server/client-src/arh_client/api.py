@@ -316,8 +316,8 @@ class APIClient:
         sha: str,
         message: str = "",
         branch: str = "",
-        files_changed: list[str] | None = None,
-        stats: str = "",
+        files_changed: list[str | dict[str, Any]] | None = None,
+        stats: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"sha": sha}
         if message:
@@ -325,10 +325,22 @@ class APIClient:
         if branch:
             payload["branch"] = branch
         if files_changed:
-            payload["files_changed"] = files_changed
+            payload["files_changed"] = APIClient._normalize_file_changes(files_changed)
         if stats:
             payload["stats"] = stats
         return payload
+
+    @staticmethod
+    def _normalize_file_changes(
+        files_changed: list[str | dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for item in files_changed:
+            if isinstance(item, str):
+                normalized.append({"path": item, "status": "modified"})
+            else:
+                normalized.append(item)
+        return normalized
 
     def record_commit(
         self,
@@ -336,8 +348,8 @@ class APIClient:
         sha: str,
         message: str = "",
         branch: str = "",
-        files_changed: list[str] | None = None,
-        stats: str = "",
+        files_changed: list[str | dict[str, Any]] | None = None,
+        stats: dict[str, Any] | None = None,
     ) -> dict:
         payload = self._build_commit_payload(sha, message, branch, files_changed, stats)
         return self._post(f"/v1/research/projects/{project_id}/commits", json=payload)
@@ -348,8 +360,8 @@ class APIClient:
         sha: str,
         message: str = "",
         branch: str = "",
-        files_changed: list[str] | None = None,
-        stats: str = "",
+        files_changed: list[str | dict[str, Any]] | None = None,
+        stats: dict[str, Any] | None = None,
     ) -> dict:
         payload = self._build_commit_payload(sha, message, branch, files_changed, stats)
         return await self._apost(

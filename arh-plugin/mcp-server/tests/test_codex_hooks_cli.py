@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from arh_client.api import APIClient
 from arh_client import cli
 
 
@@ -143,6 +144,42 @@ def test_write_project_context_sets_codex_auto_commit_defaults(tmp_path: Path):
     assert settings["auto_commit"] is True
     assert settings["codex_commit_mode"] == "git"
     assert settings["secret_scan_required"] is True
+
+
+def test_commit_payload_converts_legacy_file_paths_to_file_changes():
+    payload = APIClient._build_commit_payload(
+        "67a8cb694fda4e53d1df1a4bf2bb093b15f29d5e",
+        message="research: checkpoint",
+        branch="main",
+        files_changed=["notes/universal-handoff-smoke.md"],
+    )
+
+    assert payload["files_changed"] == [
+        {"path": "notes/universal-handoff-smoke.md", "status": "modified"}
+    ]
+
+
+def test_commit_payload_preserves_structured_file_changes():
+    payload = APIClient._build_commit_payload(
+        "67a8cb694fda4e53d1df1a4bf2bb093b15f29d5e",
+        files_changed=[
+            {
+                "path": "notes/universal-handoff-smoke.md",
+                "status": "added",
+                "additions": 53,
+                "deletions": 0,
+            }
+        ],
+    )
+
+    assert payload["files_changed"] == [
+        {
+            "path": "notes/universal-handoff-smoke.md",
+            "status": "added",
+            "additions": 53,
+            "deletions": 0,
+        }
+    ]
 
 
 def test_write_project_context_preserves_safe_handoff_mode(tmp_path: Path):
