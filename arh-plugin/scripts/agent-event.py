@@ -18,81 +18,6 @@ from typing import Any
 import harness_common as hc
 
 
-DEFAULT_API_URL = "https://api.airesearcherhub.com"
-
-
-def _read_json_file(path: Path) -> dict[str, Any]:
-    try:
-        if path.is_file():
-            data = json.loads(path.read_text())
-            if isinstance(data, dict):
-                return data
-    except (OSError, json.JSONDecodeError):
-        pass
-    return {}
-
-
-def _read_env_file(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    try:
-        if not path.is_file():
-            return values
-        for line in path.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            values[key.strip()] = value.strip().strip("\"'")
-    except OSError:
-        pass
-    return values
-
-
-def _load_context(cwd: Path) -> dict[str, str]:
-    creds = _read_json_file(Path.home() / ".arh" / "credentials")
-    project_env = _read_env_file(cwd / ".arh" / ".env")
-    project_settings = _read_json_file(cwd / ".arh" / "settings.json")
-    trace_file = _read_json_file(cwd / ".arh-trace")
-
-    context = {
-        "api_url": DEFAULT_API_URL,
-        "api_key": "",
-        "project_id": "",
-        "trace_id": "",
-    }
-    if isinstance(creds.get("api_url"), str):
-        context["api_url"] = creds["api_url"]
-    if isinstance(creds.get("api_key"), str):
-        context["api_key"] = creds["api_key"]
-    if project_env.get("ARH_API_URL"):
-        context["api_url"] = project_env["ARH_API_URL"]
-    if project_env.get("ARH_PROJECT_ID"):
-        context["project_id"] = project_env["ARH_PROJECT_ID"]
-    if project_env.get("ARH_TRACE_ID"):
-        context["trace_id"] = project_env["ARH_TRACE_ID"]
-    if isinstance(project_settings.get("project_id"), str):
-        context["project_id"] = project_settings["project_id"]
-    if isinstance(trace_file.get("trace_id"), str):
-        context["trace_id"] = trace_file["trace_id"]
-
-    context["api_url"] = os.environ.get("ARH_API_URL", context["api_url"])
-    context["api_key"] = os.environ.get("ARH_API_KEY", context["api_key"])
-    context["project_id"] = os.environ.get("ARH_PROJECT_ID", context["project_id"])
-    context["trace_id"] = os.environ.get("ARH_TRACE_ID", context["trace_id"])
-    return context
-
-
-def _write_project_id(cwd: Path, project_id: str) -> None:
-    arh_dir = cwd / ".arh"
-    arh_dir.mkdir(exist_ok=True)
-    settings_path = arh_dir / "settings.json"
-    settings = _read_json_file(settings_path)
-    if settings.get("project_id") == project_id:
-        return
-    settings["project_id"] = project_id
-    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
-
-
 def _parse_json_arg(value: str | None, label: str) -> Any:
     if value is None:
         return None
@@ -263,7 +188,7 @@ def _parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = _parser().parse_args()
     cwd = Path(args.cwd).resolve()
-    context = _load_context(cwd)
+    context = hc.load_context(cwd)
     payload = _build_payload(args, context)
 
     if args.dry_run:
@@ -272,7 +197,7 @@ def main() -> int:
 
     result = _send_event(context["api_url"], context["api_key"], payload)
     if args.command == "start" and result.get("project_id"):
-        _write_project_id(cwd, result["project_id"])
+        hc.write_project_id(cwd, result["project_id"])
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

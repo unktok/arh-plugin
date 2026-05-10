@@ -25,6 +25,15 @@ class _ProjectClient:
         return {"id": project_id, **data}
 
 
+class _LogClient:
+    def __init__(self):
+        self.calls = []
+
+    def add_log(self, project_id, data):
+        self.calls.append((project_id, data))
+        return {"id": "log-1", "project_id": project_id, **data}
+
+
 def _visibility_args(project_id="project-1", visibility="private", confirm_public=False):
     return type(
         "Args",
@@ -265,3 +274,83 @@ def test_project_create_timeout_message_mentions_recovery(monkeypatch):
     assert "after 120s" in message
     assert "--project-id <id>" in message
     assert "ARH_HTTP_TIMEOUT=180" in message
+
+
+def test_cmd_log_uses_research_log_schema(monkeypatch, capsys):
+    client = _LogClient()
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+    args = type(
+        "Args",
+        (),
+        {
+            "project_id": "project-1",
+            "step_type": "experiment",
+            "title": "Ran baseline",
+            "content": "7 passed",
+        },
+    )()
+
+    cli.cmd_log(args)
+
+    assert client.calls == [
+        (
+            "project-1",
+            {
+                "function_name": "experiment",
+                "message": "Ran baseline",
+                "input_data": {"content": "7 passed"},
+            },
+        )
+    ]
+    assert '"function_name": "experiment"' in capsys.readouterr().out
+
+
+def test_resolve_handoff_runtime_defaults_to_generic(tmp_path: Path, monkeypatch):
+    for key in ("CODEX_THREAD_ID", "CODEX_CI", "CODEX_HOME", "OPENAI_CODEX"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert cli._resolve_handoff_runtime("auto") == "generic"
+
+
+def test_resolve_handoff_runtime_detects_codex_env(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+
+    assert cli._resolve_handoff_runtime("auto") == "codex"
+
+
+def test_cmd_handoff_uses_safe_codex_handoff_mode(monkeypatch, tmp_path: Path, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CODEX_THREAD_ID", "thread-1")
+    calls = []
+
+    def fake_setup(args):
+        calls.append(("setup", args.runtime, args.codex_commit_mode))
+        return "project-1", {"claude_hooks": False}
+
+    def fake_codex_hooks(project_dir):
+        calls.append(("codex_hooks", project_dir))
+        return str(tmp_path / ".codex" / "hooks.json"), str(tmp_path / ".codex" / "config.toml")
+
+    monkeypatch.setattr(cli, "_run_research_setup", fake_setup)
+    monkeypatch.setattr(cli, "_install_codex_hooks", fake_codex_hooks)
+    monkeypatch.setattr(cli, "_print_research_setup_summary", lambda *args: None)
+    args = type(
+        "Args",
+        (),
+        {
+            "title": "Universal Handoff",
+            "runtime": "auto",
+            "codex_commit_mode": None,
+            "no_hooks": False,
+        },
+    )()
+
+    cli.cmd_handoff(args)
+
+    assert calls == [
+        ("setup", "codex", "handoff"),
+        ("codex_hooks", str(tmp_path)),
+    ]
+    assert capsys.readouterr().out.strip() == "project-1"

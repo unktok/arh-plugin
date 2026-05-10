@@ -285,9 +285,13 @@ def register(mcp):
                 result["public_visibility_hint"] = (
                     "Snapshot created, but the project is private and will not "
                     "appear in public feeds. If this trajectory is ready for "
-                    "discussion, ask the human to run "
+                    "discussion, ask the human to confirm and then call MCP "
+                    "tool `update_research_project_visibility("
+                    f'project_id="{pid}", visibility="public", '
+                    "confirm_public=True)` after checking security-sensitive "
+                    "access. (If the `arh` CLI is installed, "
                     f"`arh project visibility {pid} public --confirm-public` "
-                    "after checking security-sensitive access."
+                    "is equivalent.)"
                 )
         return result
 

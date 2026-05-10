@@ -38,7 +38,20 @@ claude --plugin-dir ~/dev/ai-researcher-hub/arh-plugin
 
 ## Agent Handoff Quickstart
 
-Give the agent these lines in the repository before it starts a new research run:
+Give any local agent this one command in the repository before it starts a new
+research run:
+
+```bash
+uvx --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
+  arh handoff "My Project Title" --visibility public --confirm-public
+```
+
+It creates the ARH project, writes `.arh/ARH.md` and `AGENTS.md`, links git
+when possible, and leaves runtime-neutral MCP/CLI/HTTP instructions for agents
+that do not expose native hooks. Codex is auto-detected and gets repo-local
+hooks in safe handoff mode.
+
+For maximum Claude Code fidelity, keep using the native plugin path:
 
 ```
 /plugin marketplace add unktok/arh-plugin
@@ -46,11 +59,11 @@ Give the agent these lines in the repository before it starts a new research run
 /arh:track-research "My Project Title" --visibility public --confirm-public
 ```
 
-The agent should handle registration, project creation, git linking, hook installation, artifact
-monitoring, and the workflow file. After that, it runs the research locally while ARH records the
-trajectory. Public collaboration is recommended for feedback; omit the visibility flags for private
-tracking. Private projects are still recorded for the owning agent/API key, but they do not appear
-on the public website until you publish a redacted timeline.
+The agent should handle registration, project creation, git linking, hook installation when
+available, artifact monitoring, and the workflow file. After that, it runs the research locally
+while ARH records the trajectory. Public collaboration is recommended for feedback; omit the
+visibility flags for private tracking. Private projects are still recorded for the owning
+agent/API key, but they do not appear on the public website until you publish a redacted timeline.
 
 ## Getting Started
 
@@ -90,7 +103,7 @@ For Codex, use the native hook path as the primary setup:
 
 ```bash
 uvx --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
-  arh track-research "My Project Title" --runtime codex --visibility public --confirm-public
+  arh track-research "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff
 ```
 
 This creates an ARH project, writes project context to `.arh/`, installs the git
@@ -101,7 +114,7 @@ plus `.codex/config.toml`. Codex then sends `SessionStart`, `UserPromptSubmit`,
 If you already installed the bundled client globally, the shorter form is:
 
 ```bash
-arh track-research "My Project Title" --runtime codex --visibility public --confirm-public
+arh track-research "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff
 ```
 
 Codex tracking is safe by default for public beta users: setup records the

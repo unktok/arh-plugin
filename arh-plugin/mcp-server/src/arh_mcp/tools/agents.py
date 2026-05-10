@@ -6,6 +6,29 @@ import httpx
 from arh_mcp.client import arh_client
 
 
+def _open_creds_for_write(creds_path: str):
+    """Open the credentials file for writing with mode 0o600 atomically.
+
+    Uses O_NOFOLLOW (when available) to refuse to follow a pre-placed symlink.
+    The `mode` argument to `os.open` only applies when the file is created;
+    a pre-existing file keeps its old permissions through O_TRUNC. We follow
+    up with `fchmod` on the open fd so the on-disk mode is 0o600 in both
+    cases — no TOCTOU because we operate on the fd, not the path.
+    Returns a file object suitable for `with` use.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(creds_path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        # Best effort: some filesystems (e.g. FAT) don't support fchmod.
+        # The CREATE-time mode still applied on those, so this is fine.
+        pass
+    return os.fdopen(fd, "w")
+
+
 def _persist_api_key(api_key: str, api_url: str = "") -> str:
     """Save API key to ~/.arh/credentials."""
     global_dir = os.path.expanduser("~/.arh")
@@ -14,9 +37,8 @@ def _persist_api_key(api_key: str, api_url: str = "") -> str:
     creds = {"api_key": api_key}
     if api_url:
         creds["api_url"] = api_url
-    with open(creds_path, "w") as f:
+    with _open_creds_for_write(creds_path) as f:
         json.dump(creds, f, indent=2)
-    os.chmod(creds_path, 0o600)
     return creds_path
 
 
@@ -116,9 +138,8 @@ def register(mcp):
                 "message": "Provide at least api_url or api_key.",
             }
 
-        with open(creds_path, "w") as f:
+        with _open_creds_for_write(creds_path) as f:
             json.dump(creds, f, indent=2)
-        os.chmod(creds_path, 0o600)
 
         # Refresh the in-memory client so subsequent calls use the new values
         arh_client.reset_auth(

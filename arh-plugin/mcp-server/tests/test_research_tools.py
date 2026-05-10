@@ -53,7 +53,9 @@ async def test_log_research_steps_batch_wraps_list_response(mcp_register, monkey
 
 
 @pytest.mark.asyncio
-async def test_update_visibility_requires_public_confirmation(mcp_register, monkeypatch):
+async def test_update_visibility_requires_public_confirmation(
+    mcp_register, monkeypatch
+):
     client = _VisibilityClient()
     monkeypatch.setattr(research, "arh_client", client)
     tools = mcp_register(research.register)
@@ -72,7 +74,10 @@ async def test_update_visibility_requires_public_confirmation(mcp_register, monk
     )
     assert result["visibility"] == "public"
     assert client.patch_calls == [
-        ("/v1/research/projects/project-1", {"visibility": "public", "confirm_public": True})
+        (
+            "/v1/research/projects/project-1",
+            {"visibility": "public", "confirm_public": True},
+        )
     ]
 
 
@@ -111,6 +116,9 @@ async def test_create_snapshot_returns_private_project_visibility_hint(
 
     assert result["id"] == "snapshot-1"
     assert "public_visibility_hint" in result
-    assert "arh project visibility project-1 public --confirm-public" in result[
-        "public_visibility_hint"
-    ]
+    hint = result["public_visibility_hint"]
+    assert "update_research_project_visibility" in hint
+    assert 'project_id="project-1"' in hint
+    assert 'visibility="public"' in hint
+    assert "confirm_public=True" in hint
+    assert "arh project visibility project-1 public --confirm-public" in hint

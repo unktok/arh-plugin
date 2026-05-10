@@ -70,8 +70,11 @@ class APIClient:
         json: dict | None = None,
         data: dict | None = None,
         files: dict | None = None,
+        params: dict | None = None,
     ) -> Any:
-        resp = self.sync_client.post(path, json=json, data=data, files=files)
+        resp = self.sync_client.post(
+            path, json=json, data=data, files=files, params=params
+        )
         resp.raise_for_status()
         return resp.json()
 
@@ -97,8 +100,11 @@ class APIClient:
         json: dict | None = None,
         data: dict | None = None,
         files: dict | None = None,
+        params: dict | None = None,
     ) -> Any:
-        resp = await self.async_client.post(path, json=json, data=data, files=files)
+        resp = await self.async_client.post(
+            path, json=json, data=data, files=files, params=params
+        )
         resp.raise_for_status()
         return resp.json()
 
