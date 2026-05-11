@@ -21,9 +21,8 @@ class ARHApiError(Exception):
 
 _STATUS_MESSAGES = {
     401: (
-        "Authentication failed. Check your ARH_API_KEY. If you recently rotated "
-        "credentials, update or unset any stale ARH_API_KEY environment variable; "
-        "it overrides ~/.arh/credentials."
+        "Authentication failed. Check ~/.arh/credentials, or ARH_API_KEY when "
+        "running in an environment-only setup."
     ),
     403: "Permission denied for this operation.",
     404: "Resource not found.",
@@ -45,24 +44,41 @@ class ARHClient:
     """HTTP client wrapper for the AI Researcher Hub REST API."""
 
     def __init__(self):
-        self.base_url = os.environ.get("ARH_API_URL", DEFAULT_API_URL)
-        env_api_key = os.environ.get("ARH_API_KEY", "")
-        self.api_key = env_api_key if _valid_api_key(env_api_key) else ""
+        self.base_url = DEFAULT_API_URL
+        self.api_key = ""
         self._client: httpx.AsyncClient | None = None
-        self._load_credentials_file()
+        self._load_credentials()
 
-    def _load_credentials_file(self):
-        """Load credentials from ~/.arh/credentials if env vars not set."""
+    def _read_credentials_file(self) -> dict:
         creds_path = os.path.expanduser("~/.arh/credentials")
         try:
             with open(creds_path) as f:
-                creds = json.load(f)
-            if not self.api_key and _valid_api_key(creds.get("api_key", "")):
-                self.api_key = creds["api_key"]
-            if self.base_url == DEFAULT_API_URL and creds.get("api_url"):
-                self.base_url = creds["api_url"]
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
         except (OSError, json.JSONDecodeError):
-            pass
+            return {}
+
+    def _resolve_credentials(self) -> tuple[str, str]:
+        """Resolve API URL/key as a bound pair.
+
+        Stored credentials are the local source of truth. Ambient environment
+        variables are fallback-only so stale launcher env cannot shadow a fresh
+        registration or redirect a stored key to a different API URL.
+        """
+        creds = self._read_credentials_file()
+        stored_key = creds.get("api_key", "")
+        stored_url = creds.get("api_url", DEFAULT_API_URL) or DEFAULT_API_URL
+        if isinstance(stored_key, str) and _valid_api_key(stored_key):
+            return str(stored_url), stored_key
+
+        env_key = os.environ.get("ARH_API_KEY", "")
+        env_url = os.environ.get("ARH_API_URL", stored_url) or stored_url
+        if _valid_api_key(env_key):
+            return env_url, env_key
+        return env_url, ""
+
+    def _load_credentials(self) -> None:
+        self.base_url, self.api_key = self._resolve_credentials()
 
     @property
     def client(self) -> httpx.AsyncClient:
@@ -145,16 +161,15 @@ class ARHClient:
 
     def reset_auth(self, api_key: str = "", api_url: str = "") -> None:
         """Update credentials and reset the HTTP client."""
-        if api_key:
+        if api_key or api_url:
+            if not api_key:
+                _, api_key = self._resolve_credentials()
+            if not api_url:
+                api_url = self.base_url
             self.api_key = api_key
-            os.environ["ARH_API_KEY"] = api_key
-        else:
-            self.base_url = os.environ.get("ARH_API_URL", DEFAULT_API_URL)
-            self.api_key = os.environ.get("ARH_API_KEY", "")
-            self._load_credentials_file()
-        if api_url:
             self.base_url = api_url
-            os.environ["ARH_API_URL"] = api_url
+        else:
+            self._load_credentials()
         if self._client is not None and not self._client.is_closed:
             self._client = None
 

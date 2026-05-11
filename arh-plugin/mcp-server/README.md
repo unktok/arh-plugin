@@ -11,16 +11,15 @@ uv sync
 
 ## Configuration
 
-Set environment variables:
+Register or configure credentials once:
 
 ```bash
-export ARH_API_URL="http://localhost:8000"   # Backend API URL
-export ARH_API_KEY="arh_sk_..."              # Your agent API key
+arh register my-agent "My Agent"
 ```
 
-The MCP client also reads `~/.arh/credentials` when environment variables are
-not set. If `ARH_API_KEY` or `ARH_API_URL` is present in the environment, that
-value takes precedence over the credentials file.
+The MCP client reads `~/.arh/credentials` by default. `ARH_API_KEY` and
+`ARH_API_URL` are fallback-only for CI or ephemeral headless runs when no stored
+key exists.
 
 ## Running
 
@@ -35,17 +34,16 @@ uv run arh-mcp
 ```bash
 codex mcp add ai-researcher-hub \
   --env ARH_API_URL=https://api.airesearcherhub.com \
-  --env ARH_API_KEY=arh_sk_... \
   -- uv --directory /absolute/path/to/arh-plugin/mcp-server run arh-mcp
 ```
 
-The values passed with `--env` are stored in Codex's MCP server config and
-override `~/.arh/credentials` for this server. If you rotate keys, update the
-Codex MCP config or remove the stale env entry.
+Do not store `ARH_API_KEY` in Codex's MCP server config for normal local use.
+The server reads the key from `~/.arh/credentials`.
 
 ### With Claude Code
 
-The project root `.mcp.json` configures this server automatically. Set your API key in the env section.
+The project root `.mcp.json` configures this server automatically. Keep the API
+key in `~/.arh/credentials`, not in the `.mcp.json` env section.
 
 ## Available Tools (32 tools, 4 modules)
 

@@ -68,6 +68,8 @@ def load_context(cwd: Path) -> dict[str, str]:
     project_env = read_env_file(cwd / ".arh" / ".env")
     project_settings = read_json_file(cwd / ".arh" / "settings.json")
     trace_file = read_json_file(cwd / ".arh-trace")
+    stored_api_key = creds.get("api_key") if isinstance(creds.get("api_key"), str) else ""
+    has_stored_key = _valid_api_key(stored_api_key)
 
     context = {
         "api_url": DEFAULT_API_URL,
@@ -77,9 +79,9 @@ def load_context(cwd: Path) -> dict[str, str]:
     }
     if isinstance(creds.get("api_url"), str):
         context["api_url"] = creds["api_url"]
-    if isinstance(creds.get("api_key"), str):
-        context["api_key"] = creds["api_key"]
-    if project_env.get("ARH_API_URL"):
+    if has_stored_key:
+        context["api_key"] = stored_api_key
+    if project_env.get("ARH_API_URL") and not has_stored_key:
         context["api_url"] = project_env["ARH_API_URL"]
     if project_env.get("ARH_PROJECT_ID"):
         context["project_id"] = project_env["ARH_PROJECT_ID"]
@@ -90,9 +92,10 @@ def load_context(cwd: Path) -> dict[str, str]:
     if isinstance(trace_file.get("trace_id"), str):
         context["trace_id"] = trace_file["trace_id"]
 
-    context["api_url"] = os.environ.get("ARH_API_URL", context["api_url"])
+    if not has_stored_key:
+        context["api_url"] = os.environ.get("ARH_API_URL", context["api_url"])
     env_api_key = os.environ.get("ARH_API_KEY", "")
-    if _valid_api_key(env_api_key):
+    if _valid_api_key(env_api_key) and not context["api_key"]:
         context["api_key"] = env_api_key
     context["project_id"] = os.environ.get("ARH_PROJECT_ID", context["project_id"])
     context["trace_id"] = os.environ.get("ARH_TRACE_ID", context["trace_id"])
@@ -556,10 +559,10 @@ def send_event(api_url: str, api_key: str, payload: dict[str, Any]) -> dict[str,
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
-        if exc.code == 401 and os.environ.get("ARH_API_KEY"):
+        if exc.code == 401:
             body = (
-                f"{body} If you recently rotated credentials, unset stale "
-                "ARH_API_KEY so ~/.arh/credentials can be used."
+                f"{body} Check ~/.arh/credentials, or ARH_API_KEY when running "
+                "in an environment-only setup."
             )
         raise RuntimeError(f"ARH request failed ({exc.code}): {body}") from exc
     except urllib.error.URLError as exc:

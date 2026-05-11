@@ -116,10 +116,10 @@ def _send_event(api_url: str, api_key: str, payload: dict[str, Any]) -> dict[str
     except RuntimeError as exc:
         hint = ""
         message = str(exc)
-        if "ARH request failed (401)" in message and os.environ.get("ARH_API_KEY"):
+        if "ARH request failed (401)" in message:
             hint = (
-                " ARH_API_KEY from the environment overrides ~/.arh/credentials; "
-                "unset or update it if it is stale."
+                " Check ~/.arh/credentials, or ARH_API_KEY when running in an "
+                "environment-only setup."
             )
         raise SystemExit(f"{message}{hint}") from exc
 

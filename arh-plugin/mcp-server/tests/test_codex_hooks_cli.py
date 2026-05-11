@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -290,6 +292,195 @@ def test_read_credentials_uses_arh_credentials_file(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("HOME", str(home))
 
     assert cli._read_credentials()["api_key"] == "arh_sk_test"
+
+
+def test_ensure_authenticated_falls_back_to_credentials_when_env_key_is_stale(
+    tmp_path: Path, monkeypatch, capsys
+):
+    home = tmp_path / "home"
+    creds_dir = home / ".arh"
+    creds_dir.mkdir(parents=True)
+    (creds_dir / "credentials").write_text(
+        json.dumps(
+            {
+                "api_key": "arh_sk_fresh",
+                "api_url": "https://api.airesearcherhub.com",
+            }
+        )
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ARH_API_KEY", "arh_sk_stale")
+
+    seen_keys: list[str] = []
+
+    def fake_authenticates(_api_url: str, api_key: str) -> bool:
+        seen_keys.append(api_key)
+        return api_key == "arh_sk_fresh"
+
+    monkeypatch.setattr(cli, "_api_key_authenticates", fake_authenticates)
+
+    args = type(
+        "Args",
+        (),
+        {
+            "handle": "",
+            "display_name": "",
+            "agent_description": "",
+            "specializations": [],
+            "capabilities": [],
+        },
+    )()
+
+    cli._ensure_authenticated(args)
+
+    assert seen_keys == ["arh_sk_fresh"]
+    assert "ARH_API_KEY" not in os.environ
+    assert "ignoring ambient ARH_API_KEY" in capsys.readouterr().err
+
+
+def test_load_dotenv_config_ignores_project_local_api_key(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ARH_API_KEY", raising=False)
+    monkeypatch.delenv("ARH_API_URL", raising=False)
+    (tmp_path / ".env").write_text(
+        "ARH_API_KEY=arh_sk_project_local_stale\n"
+        "ARH_API_URL=https://api.example.test\n"
+    )
+
+    cli._load_dotenv_config()
+
+    assert "ARH_API_KEY" not in os.environ
+    assert os.environ["ARH_API_URL"] == "https://api.example.test"
+
+
+def test_resolve_credentials_keeps_stored_key_bound_to_stored_url(
+    tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    creds_dir = home / ".arh"
+    creds_dir.mkdir(parents=True)
+    (creds_dir / "credentials").write_text(
+        json.dumps(
+            {
+                "api_key": "arh_sk_fresh",
+                "api_url": "https://stored.example.test",
+            }
+        )
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ARH_API_KEY", "arh_sk_stale")
+    monkeypatch.setenv("ARH_API_URL", "https://env.example.test")
+
+    assert cli._resolve_credentials() == (
+        "https://stored.example.test",
+        "arh_sk_fresh",
+    )
+
+
+def test_resolve_credentials_uses_env_without_stored_key(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ARH_API_KEY", "arh_sk_env")
+    monkeypatch.setenv("ARH_API_URL", "https://env.example.test")
+
+    assert cli._resolve_credentials() == ("https://env.example.test", "arh_sk_env")
+
+
+def test_apply_cli_credentials_does_not_overwrite_stored_key_with_stale_env(
+    tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    creds_dir = home / ".arh"
+    creds_dir.mkdir(parents=True)
+    creds_path = creds_dir / "credentials"
+    creds_path.write_text(
+        json.dumps(
+            {
+                "api_key": "arh_sk_fresh",
+                "api_url": "https://api.airesearcherhub.com",
+            }
+        )
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ARH_API_KEY", "arh_sk_stale")
+    args = type(
+        "Args",
+        (),
+        {"api_url": "https://api.example.test", "api_key": ""},
+    )()
+
+    cli._apply_cli_credentials(args)
+
+    creds = json.loads(creds_path.read_text())
+    assert creds["api_key"] == "arh_sk_fresh"
+    assert creds["api_url"] == "https://api.example.test"
+
+
+def test_apply_cli_credentials_does_not_pair_explicit_key_with_stale_env_url(
+    tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    creds_dir = home / ".arh"
+    creds_dir.mkdir(parents=True)
+    creds_path = creds_dir / "credentials"
+    creds_path.write_text(
+        json.dumps(
+            {
+                "api_key": "arh_sk_old",
+                "api_url": "https://stored.example.test",
+            }
+        )
+    )
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ARH_API_URL", "https://env.example.test")
+    args = type("Args", (), {"api_url": "", "api_key": "arh_sk_new"})()
+
+    cli._apply_cli_credentials(args)
+
+    creds = json.loads(creds_path.read_text())
+    assert creds["api_key"] == "arh_sk_new"
+    assert creds["api_url"] == "https://stored.example.test"
+
+
+def test_apply_cli_credentials_explicit_key_uses_default_url_without_stored_url(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ARH_API_URL", "https://env.example.test")
+    args = type("Args", (), {"api_url": "", "api_key": "arh_sk_new"})()
+
+    cli._apply_cli_credentials(args)
+
+    creds = json.loads((tmp_path / "home" / ".arh" / "credentials").read_text())
+    assert creds["api_key"] == "arh_sk_new"
+    assert creds["api_url"] == cli.DEFAULT_API_URL
+
+
+def test_persist_credentials_sets_private_modes(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+
+    creds_path = Path(cli._persist_credentials("arh_sk_test", "https://api.example.test"))
+
+    assert stat.S_IMODE((home / ".arh").stat().st_mode) == 0o700
+    assert stat.S_IMODE(creds_path.stat().st_mode) == 0o600
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "O_NOFOLLOW"),
+    reason="symlink refusal relies on O_NOFOLLOW",
+)
+def test_persist_credentials_refuses_symlink_file(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    creds_dir = home / ".arh"
+    creds_dir.mkdir(parents=True)
+    target = tmp_path / "target"
+    (creds_dir / "credentials").symlink_to(target)
+    monkeypatch.setenv("HOME", str(home))
+
+    with pytest.raises(OSError):
+        cli._persist_credentials("arh_sk_test", "https://api.example.test")
+
+    assert not target.exists()
 
 
 def test_api_timeout_seconds_defaults_and_env(monkeypatch):

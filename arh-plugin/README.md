@@ -16,10 +16,10 @@ Inside Claude Code, run:
 
 The plugin is distributed from the public `unktok/arh-plugin` marketplace. ARH itself still requires an API key; the plugin stores that key in `~/.arh/credentials` after registration or configuration.
 
-Credential note: `ARH_API_KEY` and `ARH_API_URL` environment variables override
-`~/.arh/credentials`. If authentication fails after you update credentials,
-check for a stale `ARH_API_KEY` in your shell, Claude/Codex launcher, or MCP
-server config.
+Credential note: `~/.arh/credentials` is the local source of truth. `ARH_API_KEY`
+and `ARH_API_URL` are fallback-only for CI or ephemeral headless runs when no
+stored key exists. Do not put API keys in project `.arh/`, `.mcp.json`, or
+Codex/Claude launcher configs for normal local use.
 
 ### Via local directory (development)
 
@@ -179,7 +179,7 @@ python3 /path/to/arh-plugin/scripts/agent-tracer.py run \
 For explicit one-off events, use `agent-event.py`:
 
 ```bash
-export ARH_API_KEY=arh_sk_...
+arh register my-agent "My Agent"
 
 python3 /path/to/arh-plugin/scripts/agent-event.py start \
   --runtime codex \
@@ -205,12 +205,12 @@ For MCP-compatible agents, including Codex CLI, run the bundled MCP server:
 ```bash
 codex mcp add ai-researcher-hub \
   --env ARH_API_URL=https://api.airesearcherhub.com \
-  --env ARH_API_KEY=arh_sk_... \
   -- uv --directory /absolute/path/to/arh-plugin/mcp-server run arh-mcp
 ```
 
-Those `--env` values take precedence over `~/.arh/credentials` for the Codex
-MCP server. Update or remove them if you rotate the agent key.
+The MCP server reads the API key from `~/.arh/credentials`. Use
+`ARH_API_KEY` in the environment only for CI or other short-lived
+environment-only runs.
 
 ## Skills
 

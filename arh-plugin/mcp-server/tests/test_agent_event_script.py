@@ -143,7 +143,7 @@ def test_task_completed_dry_run_payload(tmp_path: Path) -> None:
     assert payload["commit_message"] == "research: Finished the task."
 
 
-def test_401_mentions_stale_env_override(tmp_path: Path) -> None:
+def test_401_mentions_credentials_sources_for_env_only_setup(tmp_path: Path) -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
             self.send_response(401)
@@ -174,6 +174,7 @@ def test_401_mentions_stale_env_override(tmp_path: Path) -> None:
             cwd=tmp_path,
             env={
                 **os.environ,
+                "HOME": str(tmp_path / "home"),
                 "ARH_API_URL": f"http://127.0.0.1:{server.server_port}",
                 "ARH_API_KEY": "arh_sk_stale",
             },
@@ -187,4 +188,4 @@ def test_401_mentions_stale_env_override(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "ARH request failed (401)" in result.stderr
-    assert "environment overrides ~/.arh/credentials" in result.stderr
+    assert "Check ~/.arh/credentials" in result.stderr

@@ -30,6 +30,7 @@ MCP_SERVER_DIR = os.path.join(PLUGIN_ROOT, "mcp-server")
 
 HOOK_EVENTS = ["SessionStart", "PostToolUse", "Stop", "SubagentStop", "Notification"]
 ARH_MARKER = "arh-plugin"  # Used to identify ARH hooks in settings
+DEFAULT_API_URL = "https://api.airesearcherhub.com"
 
 
 def find_settings_path(global_install: bool) -> str:
@@ -58,16 +59,58 @@ def save_settings(path: str, settings: dict):
 def persist_credentials(api_key: str, api_url: str) -> str:
     """Write API credentials to ~/.arh/credentials."""
     global_dir = os.path.expanduser("~/.arh")
-    os.makedirs(global_dir, exist_ok=True)
+    if os.path.islink(global_dir):
+        raise OSError(f"Refusing to use symlinked credentials directory: {global_dir}")
+    os.makedirs(global_dir, mode=0o700, exist_ok=True)
+    if not os.path.isdir(global_dir):
+        raise OSError(f"Credentials path is not a directory: {global_dir}")
+    try:
+        os.chmod(global_dir, 0o700)
+    except OSError:
+        pass
     creds_path = os.path.join(global_dir, "credentials")
     creds = {"api_key": api_key}
     if api_url:
         creds["api_url"] = api_url
-    with open(creds_path, "w") as f:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(creds_path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        pass
+    with os.fdopen(fd, "w") as f:
         json.dump(creds, f, indent=2)
         f.write("\n")
-    os.chmod(creds_path, 0o600)
     return creds_path
+
+
+def read_credentials() -> dict:
+    creds_path = os.path.expanduser("~/.arh/credentials")
+    try:
+        with open(creds_path) as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def valid_api_key(value: str) -> bool:
+    return value.startswith("arh_sk_") and "${" not in value
+
+
+def resolve_credentials() -> tuple[str, str]:
+    creds = read_credentials()
+    stored_key = str(creds.get("api_key", "") or "").strip()
+    stored_url = str(creds.get("api_url", "") or "").strip() or DEFAULT_API_URL
+    if valid_api_key(stored_key):
+        return stored_url, stored_key
+    env_key = os.environ.get("ARH_API_KEY", "").strip()
+    env_url = os.environ.get("ARH_API_URL", stored_url).strip() or stored_url
+    if valid_api_key(env_key):
+        return env_url, env_key
+    return env_url, ""
 
 
 def write_arh_env(project_dir: str, api_url: str, project_id: str = ""):
@@ -202,7 +245,7 @@ def main():
         help="Install for current project (.claude/settings.json)",
     )
     parser.add_argument("--api-key", default="", help="ARH API key")
-    parser.add_argument("--api-url", default="https://api.airesearcherhub.com", help="ARH API URL")
+    parser.add_argument("--api-url", default="", help="ARH API URL")
     parser.add_argument("--with-mcp", action="store_true", help="Also install MCP server config")
     parser.add_argument("--uninstall", action="store_true", help="Remove ARH config")
     parser.add_argument("--quiet", action="store_true", help="No interactive prompts")
@@ -220,14 +263,20 @@ def main():
         return
 
     # Resolve API key
-    api_key = args.api_key or os.environ.get("ARH_API_KEY", "")
-    api_url = args.api_url or os.environ.get("ARH_API_URL", "https://api.airesearcherhub.com")
+    creds = read_credentials()
+    stored_url = str(creds.get("api_url", "") or "").strip() or DEFAULT_API_URL
+    resolved_url, resolved_key = resolve_credentials()
+    api_key = args.api_key or resolved_key
+    api_url = args.api_url or (stored_url if args.api_key else resolved_url)
 
     if not api_key and not args.quiet:
         api_key = prompt_api_key()
 
     if not api_key:
-        print("Error: API key is required. Use --api-key or set ARH_API_KEY.", file=sys.stderr)
+        print(
+            "Error: API key is required. Use --api-key, ~/.arh/credentials, or ARH_API_KEY.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Verify hook-handler.py exists

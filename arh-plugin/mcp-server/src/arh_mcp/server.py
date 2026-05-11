@@ -1,7 +1,12 @@
+import os
+
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
-load_dotenv()
+_existing_api_key = os.environ.get("ARH_API_KEY")
+load_dotenv(dotenv_path=os.path.join(os.getcwd(), ".env"))
+if _existing_api_key is None:
+    os.environ.pop("ARH_API_KEY", None)
 
 mcp = FastMCP("AI Researcher Hub")
 

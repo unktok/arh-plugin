@@ -196,6 +196,7 @@ def test_load_arh_env_ignores_legacy_api_key_in_dotenv(tmp_path: Path) -> None:
     arh_dir.mkdir()
     (arh_dir / ".env").write_text(
         "ARH_API_KEY=arh_sk_dead_legacy\n"
+        "ARH_API_URL=https://project-local.example.test\n"
         "ARH_PROJECT_ID=33333333-3333-3333-3333-333333333333\n"
     )
 
@@ -213,6 +214,7 @@ def test_load_arh_env_ignores_legacy_api_key_in_dotenv(tmp_path: Path) -> None:
         # temporary HOME and a fake credentials file there.
         "mod.load_arh_env()\n"
         "print(json.dumps({'ARH_API_KEY': os.environ.get('ARH_API_KEY', ''),"
+        "                   'ARH_API_URL': os.environ.get('ARH_API_URL', ''),"
         "                   'ARH_PROJECT_ID': os.environ.get('ARH_PROJECT_ID', '')}))\n"
     )
 
@@ -220,7 +222,12 @@ def test_load_arh_env_ignores_legacy_api_key_in_dotenv(tmp_path: Path) -> None:
     fake_home.mkdir()
     (fake_home / ".arh").mkdir()
     (fake_home / ".arh" / "credentials").write_text(
-        json.dumps({"api_key": "arh_sk_fresh_from_creds"})
+        json.dumps(
+            {
+                "api_key": "arh_sk_fresh_from_creds",
+                "api_url": "https://stored.example.test",
+            }
+        )
     )
 
     env = os.environ.copy()
@@ -251,6 +258,9 @@ def test_load_arh_env_ignores_legacy_api_key_in_dotenv(tmp_path: Path) -> None:
         f"hook-handler must resolve ARH_API_KEY from ~/.arh/credentials, "
         f"NOT from .arh/.env. Got: {parsed}"
     )
+    assert parsed["ARH_API_URL"] == "https://stored.example.test", (
+        f"hook-handler must keep stored credentials bound to their stored URL. Got: {parsed}"
+    )
     assert parsed["ARH_PROJECT_ID"] == "33333333-3333-3333-3333-333333333333", (
         f"ARH_PROJECT_ID must come from .arh/.env. Got: {parsed}"
     )
@@ -259,6 +269,50 @@ def test_load_arh_env_ignores_legacy_api_key_in_dotenv(tmp_path: Path) -> None:
     assert "ARH_API_KEY" in result.stderr and "legacy" in result.stderr.lower(), (
         f"expected deprecation warning on stderr; got: {result.stderr!r}"
     )
+
+
+def test_load_arh_env_key_only_credentials_use_default_url_not_ambient_url(
+    tmp_path: Path,
+) -> None:
+    arh_dir = tmp_path / ".arh"
+    arh_dir.mkdir()
+    (arh_dir / ".env").write_text("ARH_API_URL=https://project-local.example.test\n")
+
+    runner = (
+        "import importlib.util, json, os, sys\n"
+        f"sys.path.insert(0, os.path.dirname(r'{HOOK_HANDLER}'))\n"
+        f"spec = importlib.util.spec_from_file_location('hh', r'{HOOK_HANDLER}')\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(mod)\n"
+        "mod.load_arh_env()\n"
+        "print(json.dumps({'ARH_API_KEY': os.environ.get('ARH_API_KEY', ''),"
+        "                   'ARH_API_URL': os.environ.get('ARH_API_URL', '')}))\n"
+    )
+
+    fake_home = tmp_path / "fake-home"
+    fake_home.mkdir()
+    (fake_home / ".arh").mkdir()
+    (fake_home / ".arh" / "credentials").write_text(
+        json.dumps({"api_key": "arh_sk_key_only"})
+    )
+    env = os.environ.copy()
+    env["HOME"] = str(fake_home)
+    env["ARH_API_URL"] = "https://ambient.example.test"
+    env.pop("ARH_API_KEY", None)
+
+    result = subprocess.run(
+        [sys.executable, "-c", runner],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
+    parsed = json.loads(result.stdout.strip().splitlines()[-1])
+    assert parsed["ARH_API_KEY"] == "arh_sk_key_only"
+    assert parsed["ARH_API_URL"] == "https://api.airesearcherhub.com"
 
 
 @pytest.fixture(autouse=True)

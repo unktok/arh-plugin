@@ -12,18 +12,32 @@ import httpx
 from dotenv import load_dotenv
 
 
+DEFAULT_API_URL = "https://api.airesearcherhub.com"
+
+
+def _valid_api_key(value: str) -> bool:
+    return value.startswith("arh_sk_") and "${" not in value
+
+
+def _load_dotenv_config() -> None:
+    """Load local dotenv config without accepting project-local ARH_API_KEY.
+
+    API keys should come from the process environment or `~/.arh/credentials`,
+    not from a repository `.env` file that may be stale or accidentally shared.
+    """
+    existing_api_key = os.environ.get("ARH_API_KEY")
+    load_dotenv(dotenv_path=os.path.join(os.getcwd(), ".env"))
+    if existing_api_key is None:
+        os.environ.pop("ARH_API_KEY", None)
+
+
 def _get_client():
     from arh_client.api import APIClient
     from arh_client.config import configure
 
-    load_dotenv()
+    _load_dotenv_config()
 
-    creds = _read_credentials()
-    api_key = os.environ.get("ARH_API_KEY", creds.get("api_key", ""))
-    api_url = os.environ.get(
-        "ARH_API_URL",
-        creds.get("api_url", "https://api.airesearcherhub.com"),
-    )
+    api_url, api_key = _resolve_credentials()
     timeout = _api_timeout_seconds()
 
     if api_key or api_url:
@@ -42,6 +56,57 @@ def _read_credentials() -> dict:
     except (OSError, json.JSONDecodeError):
         pass
     return {}
+
+
+def _resolve_credentials() -> tuple[str, str]:
+    """Resolve API URL/key as a bound pair.
+
+    Stored credentials are the local source of truth. Ambient environment
+    variables are fallback-only, so stale launcher env cannot shadow a fresh
+    registration or redirect a stored key to another API URL.
+    """
+    creds = _read_credentials()
+    stored_key = str(creds.get("api_key", "") or "").strip()
+    stored_url = str(creds.get("api_url", "") or "").strip() or DEFAULT_API_URL
+    if _valid_api_key(stored_key):
+        return stored_url, stored_key
+
+    env_key = os.environ.get("ARH_API_KEY", "").strip()
+    env_url = os.environ.get("ARH_API_URL", stored_url).strip() or stored_url
+    if _valid_api_key(env_key):
+        return env_url, env_key
+    return env_url, ""
+
+
+def _credentials_dir() -> str:
+    global_dir = os.path.expanduser("~/.arh")
+    if os.path.islink(global_dir):
+        raise OSError(f"Refusing to use symlinked credentials directory: {global_dir}")
+    os.makedirs(global_dir, mode=0o700, exist_ok=True)
+    if not os.path.isdir(global_dir):
+        raise OSError(f"Credentials path is not a directory: {global_dir}")
+    try:
+        os.chmod(global_dir, 0o700)
+    except OSError:
+        pass
+    return global_dir
+
+
+def _write_credentials(creds: dict) -> str:
+    global_dir = _credentials_dir()
+    creds_path = os.path.join(global_dir, "credentials")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(creds_path, flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        pass
+    with os.fdopen(fd, "w") as f:
+        json.dump(creds, f, indent=2)
+        f.write("\n")
+    return creds_path
 
 
 def _api_timeout_seconds() -> float:
@@ -470,10 +535,8 @@ def _apply_cli_credentials(args) -> None:
     if not (api_url or api_key):
         return
     creds = _read_credentials()
-    final_url = api_url or os.environ.get(
-        "ARH_API_URL", creds.get("api_url", "https://api.airesearcherhub.com")
-    )
-    final_key = api_key or os.environ.get("ARH_API_KEY", creds.get("api_key", ""))
+    final_url = api_url or creds.get("api_url", DEFAULT_API_URL)
+    final_key = api_key or creds.get("api_key", "") or os.environ.get("ARH_API_KEY", "")
     if final_key:
         _persist_credentials(final_key, final_url)
     elif api_url:
@@ -481,13 +544,7 @@ def _apply_cli_credentials(args) -> None:
         partial = {"api_url": final_url}
         if creds.get("api_key"):
             partial["api_key"] = creds["api_key"]
-        global_dir = os.path.expanduser("~/.arh")
-        os.makedirs(global_dir, exist_ok=True)
-        creds_path = os.path.join(global_dir, "credentials")
-        with open(creds_path, "w") as f:
-            json.dump(partial, f, indent=2)
-            f.write("\n")
-        os.chmod(creds_path, 0o600)
+        _write_credentials(partial)
 
 
 def _check_api_connection(args) -> None:
@@ -496,10 +553,7 @@ def _check_api_connection(args) -> None:
     Mirrors `init-research` SKILL.md Step 1. Surfaces a friendly self-host
     fallback prompt when the default hosted API is unreachable.
     """
-    creds = _read_credentials()
-    api_url = os.environ.get(
-        "ARH_API_URL", creds.get("api_url", "https://api.airesearcherhub.com")
-    )
+    api_url, _ = _resolve_credentials()
     if _ping_health(api_url):
         return
 
@@ -526,17 +580,11 @@ def _check_api_connection(args) -> None:
         print(f"Error: {custom} is also unreachable. Aborting.", file=sys.stderr)
         sys.exit(1)
     # Persist the working URL so subsequent calls use it.
-    existing_key = creds.get("api_key", "") or os.environ.get("ARH_API_KEY", "")
+    _, existing_key = _resolve_credentials()
     if existing_key:
         _persist_credentials(existing_key, custom)
     else:
-        global_dir = os.path.expanduser("~/.arh")
-        os.makedirs(global_dir, exist_ok=True)
-        creds_path = os.path.join(global_dir, "credentials")
-        with open(creds_path, "w") as f:
-            json.dump({"api_url": custom}, f, indent=2)
-            f.write("\n")
-        os.chmod(creds_path, 0o600)
+        _write_credentials({"api_url": custom})
     os.environ["ARH_API_URL"] = custom
 
 
@@ -550,10 +598,11 @@ def _ping_health(api_url: str, timeout: float = 8.0) -> bool:
 
 
 def _ensure_authenticated(args) -> None:
-    """Ensure ~/.arh/credentials or ARH_API_KEY is set; otherwise register.
+    """Ensure ~/.arh/credentials or ARH_API_KEY is valid; otherwise register.
 
     Resolution order:
-      1. ARH_API_KEY env or `~/.arh/credentials` already populated → no-op
+      1. Valid ARH_API_KEY env or `~/.arh/credentials` key → no-op
+      1b. Invalid ARH_API_KEY env + valid `~/.arh/credentials` → use credentials
       2. `--handle` and `--display-name` CLI flags present → non-interactive
          register with optional --agent-description / --specializations /
          --capabilities
@@ -562,7 +611,7 @@ def _ensure_authenticated(args) -> None:
       4. otherwise → exit with a helpful error
     """
     creds = _read_credentials()
-    if os.environ.get("ARH_API_KEY") or creds.get("api_key"):
+    if _use_valid_existing_credentials(creds):
         return
 
     handle = (getattr(args, "handle", None) or "").strip()
@@ -615,9 +664,7 @@ def _ensure_authenticated(args) -> None:
         )
         sys.exit(1)
 
-    api_url = os.environ.get(
-        "ARH_API_URL", creds.get("api_url", "https://api.airesearcherhub.com")
-    )
+    api_url, _ = _resolve_credentials()
     payload: dict = {"handle": handle, "display_name": display_name}
     if agent_description:
         payload["description"] = agent_description
@@ -654,6 +701,76 @@ def _ensure_authenticated(args) -> None:
         f"Registered agent '{handle}'. API key saved to ~/.arh/credentials.",
         file=sys.stderr,
     )
+
+
+def _use_valid_existing_credentials(creds: dict) -> bool:
+    """Validate existing credentials before setup writes any project state.
+
+    A stale `ARH_API_KEY` in the launching agent's environment used to shadow
+    a fresh `~/.arh/credentials` file and fail later at project creation with a
+    bare 401. Stored credentials are validated first because they are the
+    local source of truth; env credentials are fallback-only when no stored key
+    exists or the stored key is invalid.
+    """
+    env_key = os.environ.get("ARH_API_KEY", "").strip()
+    stored_key = str(creds.get("api_key", "") or "").strip()
+    stored_api_url = str(creds.get("api_url", "") or "").strip() or DEFAULT_API_URL
+
+    if stored_key:
+        if _api_key_authenticates(stored_api_url, stored_key):
+            if env_key and env_key != stored_key:
+                os.environ.pop("ARH_API_KEY", None)
+                print(
+                    "Warning: ignoring ambient ARH_API_KEY because "
+                    "~/.arh/credentials is configured.",
+                    file=sys.stderr,
+                )
+            return True
+        print(
+            "Warning: ~/.arh/credentials contains an invalid ARH API key; "
+            "registration is required.",
+            file=sys.stderr,
+        )
+
+    if env_key:
+        env_api_url = os.environ.get("ARH_API_URL", stored_api_url)
+        if _api_key_authenticates(env_api_url, env_key):
+            return True
+        print(
+            "Warning: ARH_API_KEY in the environment is invalid.",
+            file=sys.stderr,
+        )
+        os.environ.pop("ARH_API_KEY", None)
+    return False
+
+
+def _api_key_authenticates(api_url: str, api_key: str) -> bool:
+    if not api_key:
+        return False
+
+    from arh_client.api import APIClient
+
+    client = APIClient(
+        api_key=api_key,
+        base_url=api_url,
+        timeout=_api_timeout_seconds(),
+    )
+    try:
+        client.get_me()
+        return True
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            return False
+        print(
+            f"Error: failed to verify ARH credentials: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except httpx.HTTPError as exc:
+        print(f"Error: failed to verify ARH credentials: {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        client.close()
 
 
 def _try_auto_create_github_repo(api_url: str, api_key: str) -> tuple[str, str, bool]:
@@ -906,12 +1023,8 @@ def _run_research_setup(args):
             sys.exit(1)
         project_id = project["id"]
         print(f"Project created: {project_id}", file=sys.stderr)
-    creds = _read_credentials()
-    api_url = os.environ.get(
-        "ARH_API_URL", creds.get("api_url", "https://api.airesearcherhub.com")
-    )
-    api_key = os.environ.get("ARH_API_KEY", creds.get("api_key", ""))
-    if api_key:
+    api_url, api_key = _resolve_credentials()
+    if api_key and not _valid_api_key(str(_read_credentials().get("api_key", ""))):
         _persist_credentials(api_key, api_url)
     gitleaks_ok, gitleaks_status = _ensure_gitleaks_available()
     print(f"Gitleaks: {gitleaks_status}", file=sys.stderr)
@@ -1130,13 +1243,17 @@ def cmd_setup(args):
     import subprocess as _subprocess
 
     # Resolve API credentials
-    api_key = args.api_key or os.environ.get("ARH_API_KEY", "")
-    api_url = args.api_url or os.environ.get(
-        "ARH_API_URL", "https://api.airesearcherhub.com"
-    )
+    creds = _read_credentials()
+    stored_url = str(creds.get("api_url", "") or "").strip() or DEFAULT_API_URL
+    resolved_url, resolved_key = _resolve_credentials()
+    api_key = args.api_key or resolved_key
+    api_url = args.api_url or (stored_url if args.api_key else resolved_url)
 
     if not api_key:
-        print("Error: --api-key required or set ARH_API_KEY env var", file=sys.stderr)
+        print(
+            "Error: --api-key required, or configure ~/.arh/credentials / ARH_API_KEY.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Find the plugin's setup.py
@@ -1168,7 +1285,10 @@ def cmd_setup(args):
             cmd.append("--global")
         else:
             cmd.append("--project")
-        cmd.extend(["--api-key", api_key, "--api-url", api_url])
+        if args.api_key:
+            cmd.extend(["--api-key", args.api_key])
+        if args.api_url:
+            cmd.extend(["--api-url", args.api_url])
         if args.with_mcp:
             cmd.append("--with-mcp")
         cmd.append("--quiet")
@@ -1318,17 +1438,10 @@ def _enable_codex_hooks_feature(config_path: str) -> None:
 
 def _persist_credentials(api_key: str, api_url: str):
     """Write API credentials to ~/.arh/credentials."""
-    global_dir = os.path.expanduser("~/.arh")
-    os.makedirs(global_dir, exist_ok=True)
-    creds_path = os.path.join(global_dir, "credentials")
     creds = {"api_key": api_key}
     if api_url:
         creds["api_url"] = api_url
-    with open(creds_path, "w") as f:
-        json.dump(creds, f, indent=2)
-        f.write("\n")
-    os.chmod(creds_path, 0o600)
-    return creds_path
+    return _write_credentials(creds)
 
 
 def _write_arh_project_context(
@@ -2191,7 +2304,7 @@ def main():
         "--api-key", default="", help="ARH API key (or set ARH_API_KEY)"
     )
     p_setup.add_argument(
-        "--api-url", default="https://api.airesearcherhub.com", help="ARH API URL"
+        "--api-url", default="", help="ARH API URL"
     )
     setup_scope = p_setup.add_mutually_exclusive_group()
     setup_scope.add_argument(

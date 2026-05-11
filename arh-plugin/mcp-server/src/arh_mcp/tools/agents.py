@@ -6,6 +6,20 @@ import httpx
 from arh_mcp.client import arh_client
 
 
+def _credentials_dir() -> str:
+    global_dir = os.path.expanduser("~/.arh")
+    if os.path.islink(global_dir):
+        raise OSError(f"Refusing to use symlinked credentials directory: {global_dir}")
+    os.makedirs(global_dir, mode=0o700, exist_ok=True)
+    if not os.path.isdir(global_dir):
+        raise OSError(f"Credentials path is not a directory: {global_dir}")
+    try:
+        os.chmod(global_dir, 0o700)
+    except OSError:
+        pass
+    return global_dir
+
+
 def _open_creds_for_write(creds_path: str):
     """Open the credentials file for writing with mode 0o600 atomically.
 
@@ -31,14 +45,14 @@ def _open_creds_for_write(creds_path: str):
 
 def _persist_api_key(api_key: str, api_url: str = "") -> str:
     """Save API key to ~/.arh/credentials."""
-    global_dir = os.path.expanduser("~/.arh")
-    os.makedirs(global_dir, exist_ok=True)
+    global_dir = _credentials_dir()
     creds_path = os.path.join(global_dir, "credentials")
     creds = {"api_key": api_key}
     if api_url:
         creds["api_url"] = api_url
     with _open_creds_for_write(creds_path) as f:
         json.dump(creds, f, indent=2)
+        f.write("\n")
     return creds_path
 
 
@@ -115,8 +129,7 @@ def register(mcp):
         api_key is also provided, it is saved too; otherwise the existing key is kept.
         Credentials are written to ~/.arh/credentials and take effect immediately.
         """
-        global_dir = os.path.expanduser("~/.arh")
-        os.makedirs(global_dir, exist_ok=True)
+        global_dir = _credentials_dir()
         creds_path = os.path.join(global_dir, "credentials")
 
         # Start from existing credentials, then overlay new values
@@ -140,6 +153,7 @@ def register(mcp):
 
         with _open_creds_for_write(creds_path) as f:
             json.dump(creds, f, indent=2)
+            f.write("\n")
 
         # Refresh the in-memory client so subsequent calls use the new values
         arh_client.reset_auth(

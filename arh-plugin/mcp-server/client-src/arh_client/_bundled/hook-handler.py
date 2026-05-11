@@ -25,6 +25,10 @@ MAX_THINKING_LENGTH = 5000
 MAX_TRANSCRIPT_ENTRIES = 50
 
 
+def _valid_api_key(value: str) -> bool:
+    return value.startswith("arh_sk_") and "${" not in value
+
+
 def load_arh_env():
     """Populate ARH_* env vars from user-global credentials and project config.
 
@@ -33,15 +37,15 @@ def load_arh_env():
         `.arh/.env` is NOT consulted for `ARH_API_KEY`. This prevents the
         round-5 silent-override bug where a project's stale `.arh/.env` kept
         re-asserting an old key after `register_agent` rewrote `~/.arh/credentials`.
-      - **Project / trace context** still comes from project-local `.arh/.env`
-        (`ARH_PROJECT_ID`, `ARH_API_URL`, `ARH_TRACE_ID`), because those are
-        legitimately per-project values.
+      - **Project / trace context** still comes from project-local `.arh/.env`.
+        `ARH_API_URL` is project-local only when there is no stored API key;
+        a stored key and URL are treated as a bound credential pair.
 
     Resolution order:
       1. `~/.arh/credentials` → ARH_API_KEY, ARH_API_URL
-      2. Project `.arh/.env` → ARH_API_URL, ARH_PROJECT_ID, ARH_TRACE_ID
-         (overrides API_URL if present; ARH_API_KEY in this file is IGNORED
-          and a deprecation warning is printed to stderr)
+      2. Project `.arh/.env` → ARH_PROJECT_ID, ARH_TRACE_ID, and ARH_API_URL
+         only without a stored API key. ARH_API_KEY in this file is IGNORED
+         and a deprecation warning is printed to stderr.
       3. Existing shell env vars (preserved when no source above sets the key)
     """
     ARH_PROJECT_KEYS = ("ARH_API_URL", "ARH_PROJECT_ID", "ARH_TRACE_ID")
@@ -72,13 +76,18 @@ def load_arh_env():
     resolved: dict[str, str] = {}
 
     # API key: ONLY from user-global credentials.
-    if creds.get("api_key"):
-        resolved["ARH_API_KEY"] = creds["api_key"]
-    if creds.get("api_url"):
+    stored_key = str(creds.get("api_key", "") or "")
+    has_stored_key = _valid_api_key(stored_key)
+    if has_stored_key:
+        resolved["ARH_API_KEY"] = stored_key
+        resolved["ARH_API_URL"] = creds.get("api_url") or "https://api.airesearcherhub.com"
+    elif creds.get("api_url"):
         resolved["ARH_API_URL"] = creds["api_url"]
 
     # Project-local .arh/.env contributes project / trace context only.
     for k in ARH_PROJECT_KEYS:
+        if k == "ARH_API_URL" and has_stored_key:
+            continue
         if k in env_file:
             resolved[k] = env_file[k]
 
@@ -394,6 +403,34 @@ def truncate(value: str, max_length: int = MAX_OUTPUT_LENGTH) -> str:
     return value
 
 
+def _transcript_text_key(value: object) -> str:
+    text = value if isinstance(value, str) else str(value)
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    suffix = "... [truncated]"
+    if normalized.endswith(suffix):
+        normalized = normalized[: -len(suffix)]
+    return normalized[:MAX_OUTPUT_LENGTH]
+
+
+def _filter_duplicate_assistant_transcript_entries(
+    entries: list[dict], duplicate_texts: list[str]
+) -> list[dict]:
+    duplicate_keys = {
+        key for text in duplicate_texts if (key := _transcript_text_key(text))
+    }
+    if not duplicate_keys:
+        return entries
+
+    filtered: list[dict] = []
+    for entry in entries:
+        if entry.get("type") == "text":
+            key = _transcript_text_key(entry.get("content", ""))
+            if key and key in duplicate_keys:
+                continue
+        filtered.append(entry)
+    return filtered
+
+
 _SHADOW_REF_PREFIX = "refs/heads/arh-auto"
 _AUTO_CHECKPOINT_THROTTLE_SECONDS = 30
 _AUTO_CHECKPOINT_STATE_FILE = ".arh/.auto-checkpoint-state"
@@ -504,6 +541,10 @@ def build_payload(event_type: str, event_data: dict) -> dict | None:
         transcript_path = event_data.get("transcript_path", "")
         if transcript_path:
             new_entries = _read_new_transcript_entries(transcript_path, session_id)
+            if last_msg:
+                new_entries = _filter_duplicate_assistant_transcript_entries(
+                    new_entries, [last_msg]
+                )
             if new_entries:
                 payload["transcript_entries"] = new_entries
 
@@ -541,6 +582,10 @@ def build_payload(event_type: str, event_data: dict) -> dict | None:
         )
         if transcript_path:
             transcript_entries = parse_transcript(transcript_path, max_entries=20)
+            if last_msg:
+                transcript_entries = _filter_duplicate_assistant_transcript_entries(
+                    transcript_entries, [last_msg]
+                )
             if transcript_entries:
                 payload["transcript_entries"] = transcript_entries
 
