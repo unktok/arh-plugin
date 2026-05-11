@@ -42,7 +42,7 @@ Give any local agent this one command in the repository before it starts a new
 research run:
 
 ```bash
-uvx --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
+uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
   arh handoff "My Project Title" --visibility public --confirm-public
 ```
 
@@ -102,7 +102,7 @@ runners, and custom agents that are not running inside Claude Code hooks.
 For Codex, use the native hook path as the primary setup:
 
 ```bash
-uvx --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
+uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
   arh track-research "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff
 ```
 
