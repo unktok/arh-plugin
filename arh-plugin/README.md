@@ -50,6 +50,9 @@ It creates the ARH project, writes `.arh/ARH.md` and `AGENTS.md`, links git
 when possible, and leaves runtime-neutral MCP/CLI/HTTP instructions for agents
 that do not expose native hooks. Codex is auto-detected and gets repo-local
 hooks in safe handoff mode.
+If this host does not already have `~/.arh/credentials`, first-time setup must
+use a real `--handle` and `--display-name`; copied placeholder agent names are
+rejected instead of registering a bogus identity.
 
 For maximum Claude Code fidelity, keep using the native plugin path:
 

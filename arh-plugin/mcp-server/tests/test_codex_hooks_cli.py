@@ -338,6 +338,30 @@ def test_ensure_authenticated_falls_back_to_credentials_when_env_key_is_stale(
     assert "ignoring ambient ARH_API_KEY" in capsys.readouterr().err
 
 
+def test_ensure_authenticated_rejects_placeholder_agent_identity(
+    tmp_path: Path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("ARH_API_KEY", raising=False)
+
+    args = type(
+        "Args",
+        (),
+        {
+            "handle": "agent-handle",
+            "display_name": "Agent name",
+            "agent_description": "",
+            "specializations": [],
+            "capabilities": [],
+        },
+    )()
+
+    with pytest.raises(SystemExit):
+        cli._ensure_authenticated(args)
+
+    assert "replace the placeholder agent identity" in capsys.readouterr().err
+
+
 def test_load_dotenv_config_ignores_project_local_api_key(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ARH_API_KEY", raising=False)

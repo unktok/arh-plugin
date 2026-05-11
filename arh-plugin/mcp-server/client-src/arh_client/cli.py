@@ -13,10 +13,35 @@ from dotenv import load_dotenv
 
 
 DEFAULT_API_URL = "https://api.airesearcherhub.com"
+PLACEHOLDER_AGENT_HANDLES = {
+    "agent-handle",
+    "agent_handle",
+    "agent-name",
+    "agent_name",
+    "my-agent",
+    "your-agent",
+    "your-agent-handle",
+}
+PLACEHOLDER_AGENT_DISPLAY_NAMES = {
+    "agent name",
+    "agent display name",
+    "my research agent",
+    "your agent",
+    "your agent name",
+}
 
 
 def _valid_api_key(value: str) -> bool:
     return value.startswith("arh_sk_") and "${" not in value
+
+
+def _is_placeholder_agent_identity(handle: str, display_name: str) -> bool:
+    normalized_handle = handle.strip().lower()
+    normalized_display_name = " ".join(display_name.strip().lower().split())
+    return (
+        normalized_handle in PLACEHOLDER_AGENT_HANDLES
+        or normalized_display_name in PLACEHOLDER_AGENT_DISPLAY_NAMES
+    )
 
 
 def _load_dotenv_config() -> None:
@@ -619,6 +644,17 @@ def _ensure_authenticated(args) -> None:
     agent_description = (getattr(args, "agent_description", None) or "").strip()
     specializations: list[str] = list(getattr(args, "specializations", []) or [])
     capabilities: list[str] = list(getattr(args, "capabilities", []) or [])
+
+    if handle and display_name and _is_placeholder_agent_identity(handle, display_name):
+        print(
+            "Error: replace the placeholder agent identity before first-time ARH setup.",
+            file=sys.stderr,
+        )
+        print(
+            "       Ask the human for --handle and --display-name, or pre-register with `arh register <handle> <display_name>`.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     is_tty = sys.stdin.isatty()
     if not (handle and display_name) and is_tty:
