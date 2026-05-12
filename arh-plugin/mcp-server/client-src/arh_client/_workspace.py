@@ -38,7 +38,10 @@ Use the highest-quality route available after handoff:
 
 Do not silently downgrade. If `.arh/adapter-status.json` says the native adapter
 is degraded, follow the MCP route first and the CLI/HTTP routes only when MCP is
-unavailable.
+unavailable. If Codex reports `installed_unverified`, the hook files were written
+but Codex has not yet proven that project-local hooks can run; approve Codex hook
+review if prompted and run `arh doctor codex` if timeline events do not appear
+after the first turn.
 
 ## Generic agent contract
 If you are not Claude Code or Codex, you can still produce a useful ARH timeline:
@@ -120,7 +123,7 @@ peer-feed inbox. You don't have to push it to them; the platform routes.
 1. If no `project_id` is set, call `/arh:init-research` once to set up.
 2. If `link_git_repo` was not run, register artifacts will fail — fix link first.
 3. If a nudge from the system says "uncommitted changes", call `checkpoint` immediately.
-4. If `.arh/adapter-status.json` says `degraded`, keep working but use MCP/CLI checkpoints more frequently.
+4. If `.arh/adapter-status.json` says `degraded`, keep working but use MCP/CLI checkpoints more frequently. If it says `installed_unverified`, approve Codex hook review if prompted and verify with `arh doctor codex`.
 """
 
 
@@ -137,7 +140,7 @@ AGENTS_MD_BLOCK = """## AI Researcher Hub
 This repository is tracked by AI Researcher Hub. Before acting on research tasks, read `.arh/ARH.md`.
 
 - Use the highest-fidelity ARH interface available: native runtime hooks first, MCP tools second, CLI/HTTP fallback last.
-- Check `.arh/adapter-status.json` if capture quality matters; if native hooks are degraded, use MCP/CLI checkpoints deliberately.
+- Check `.arh/adapter-status.json` if capture quality matters; if native hooks are degraded or Codex hooks are still `installed_unverified`, use MCP/CLI checkpoints deliberately until verification succeeds.
 - Narrate meaningful progress with `checkpoint(summary=...)` or `arh checkpoint "..."`; do not replace checkpoints with bare `git commit`.
 - Draft snapshots after meaningful findings. Publishing requires explicit human approval.
 """

@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -13,6 +14,7 @@ from dotenv import load_dotenv
 
 
 DEFAULT_API_URL = "https://api.airesearcherhub.com"
+CODEX_REQUIRED_HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop")
 PLACEHOLDER_AGENT_HANDLES = {
     "agent-handle",
     "agent_handle",
@@ -33,6 +35,20 @@ PLACEHOLDER_AGENT_DISPLAY_NAMES = {
 
 def _valid_api_key(value: str) -> bool:
     return value.startswith("arh_sk_") and "${" not in value
+
+
+def _redact_cli_text(value: str) -> str:
+    patterns = [
+        (re.compile(r"\b(arh_sk_)[A-Za-z0-9._-]+"), r"\1[REDACTED]"),
+        (re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE), "Bearer [REDACTED]"),
+        (re.compile(r"\b(sk_live_|sk_test_|rk_live_|rk_test_|sk-or-|sk-)[A-Za-z0-9._-]{12,}"), r"\1[REDACTED]"),
+        (re.compile(r"\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{20,}"), r"\1[REDACTED]"),
+        (re.compile(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b"), r"\1[REDACTED]"),
+    ]
+    redacted = value
+    for pattern, replacement in patterns:
+        redacted = pattern.sub(replacement, redacted)
+    return redacted
 
 
 def _is_placeholder_agent_identity(handle: str, display_name: str) -> bool:
@@ -268,18 +284,6 @@ def cmd_handoff(args):
         args.codex_commit_mode = "handoff"
 
     project_id, summary = _run_research_setup(args)
-
-    codex_hooks = False
-    if resolved_runtime == "codex" and not args.no_hooks:
-        try:
-            hook_path, config_path = _install_codex_hooks(os.getcwd())
-            codex_hooks = True
-            print(f"Codex hooks installed: {hook_path}", file=sys.stderr)
-            print(f"Codex hooks enabled:   {config_path}", file=sys.stderr)
-        except Exception as e:
-            print(f"Warning: failed to install Codex hooks: {e}", file=sys.stderr)
-
-    summary["codex_hooks"] = codex_hooks
     summary["resolved_runtime"] = resolved_runtime
     if requested_runtime == "auto":
         summary["runtime_auto_detected"] = resolved_runtime
@@ -446,7 +450,7 @@ def _install_runtime_adapter(
             print(f"Codex hooks enabled:   {config_path}", file=sys.stderr)
             status = _runtime_adapter_status(
                 adapter,
-                "installed",
+                "installed_unverified",
                 requested_runtime=requested_runtime,
                 resolved_runtime=resolved_runtime,
                 files={
@@ -455,6 +459,16 @@ def _install_runtime_adapter(
                     "workflow": ".arh/ARH.md",
                     "agent_instructions": "AGENTS.md",
                 },
+            )
+            status["native_hooks_installed"] = True
+            status["native_hooks_verified"] = False
+            status["native_hooks_observed_events"] = []
+            status["native_hooks_missing_events"] = list(CODEX_REQUIRED_HOOK_EVENTS)
+            status["verification_hint"] = (
+                "Start a new trusted Codex session in this repository. If Codex "
+                "asks to review project hooks, approve the ARH hook. Run "
+                "`arh doctor codex` if no user/tool/session logs appear after "
+                "the first turn."
             )
         except Exception as e:
             print(f"Warning: failed to install Codex hooks: {e}", file=sys.stderr)
@@ -1176,7 +1190,8 @@ def _run_research_setup(args):
         ),
         "codex_hooks": (
             adapter_status.get("selected_adapter") == "codex"
-            and adapter_status.get("status") == "installed"
+            and adapter_status.get("status")
+            in {"installed", "installed_unverified", "installed_partial"}
         ),
         "adapter_status": adapter_status,
         "gitleaks": gitleaks_ok,
@@ -1237,8 +1252,16 @@ def _print_research_setup_summary(args, project_id: str, summary: dict):
         file=sys.stderr,
     )
     if getattr(args, "runtime", "") == "codex":
+        codex_status = "skipped"
+        if summary.get("codex_hooks"):
+            adapter_status = summary.get("adapter_status") or {}
+            codex_status = (
+                "installed"
+                if adapter_status.get("native_hooks_verified")
+                else "installed; awaiting hook verification"
+            )
         print(
-            f"  Codex Hooks:{' installed' if summary.get('codex_hooks') else ' skipped'}",
+            f"  Codex Hooks: {codex_status}",
             file=sys.stderr,
         )
     if visibility == "private":
@@ -1444,32 +1467,284 @@ def _enable_codex_hooks_feature(config_path: str) -> None:
     """Enable Codex hooks in project-local config without requiring TOML deps."""
     if not os.path.exists(config_path):
         with open(config_path, "w") as f:
-            f.write("[features]\ncodex_hooks = true\n")
+            f.write("[features]\nhooks = true\n")
         return
 
     with open(config_path, "r") as f:
         lines = f.read().splitlines()
-
-    for i, line in enumerate(lines):
-        if line.strip().startswith("codex_hooks"):
-            lines[i] = "codex_hooks = true"
-            with open(config_path, "w") as f:
-                f.write("\n".join(lines) + "\n")
-            return
 
     features_idx = next(
         (i for i, line in enumerate(lines) if line.strip() == "[features]"),
         None,
     )
     if features_idx is not None:
-        lines.insert(features_idx + 1, "codex_hooks = true")
+        next_section_idx = next(
+            (
+                i
+                for i in range(features_idx + 1, len(lines))
+                if lines[i].strip().startswith("[")
+            ),
+            len(lines),
+        )
+        new_lines: list[str] = []
+        hooks_seen = False
+        for line in lines[features_idx + 1 : next_section_idx]:
+            stripped = line.strip()
+            key = stripped.split("=", 1)[0].strip() if "=" in stripped else ""
+            if key == "codex_hooks":
+                continue
+            if key == "hooks":
+                if not hooks_seen:
+                    new_lines.append("hooks = true")
+                    hooks_seen = True
+                continue
+            new_lines.append(line)
+        if not hooks_seen:
+            new_lines.insert(0, "hooks = true")
+        lines = lines[: features_idx + 1] + new_lines + lines[next_section_idx:]
     else:
         if lines and lines[-1].strip():
             lines.append("")
-        lines.extend(["[features]", "codex_hooks = true"])
+        lines.extend(["[features]", "hooks = true"])
 
     with open(config_path, "w") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def _find_project_context_dir(start_dir: str) -> str:
+    current = os.path.abspath(start_dir)
+    while True:
+        arh_dir = os.path.join(current, ".arh")
+        if any(
+            os.path.exists(os.path.join(arh_dir, marker))
+            for marker in ("settings.json", ".env", "ARH.md", "adapter-status.json")
+        ):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return os.path.abspath(start_dir)
+        current = parent
+
+
+def _codex_hooks_feature_state(config_path: str) -> dict:
+    state = {"hooks": False, "codex_hooks": False}
+    if not os.path.isfile(config_path):
+        return state
+    try:
+        lines = open(config_path).read().splitlines()
+    except OSError:
+        return state
+    features_idx = next(
+        (i for i, line in enumerate(lines) if line.strip() == "[features]"),
+        None,
+    )
+    if features_idx is None:
+        return state
+    next_section_idx = next(
+        (
+            i
+            for i in range(features_idx + 1, len(lines))
+            if lines[i].strip().startswith("[")
+        ),
+        len(lines),
+    )
+    for line in lines[features_idx + 1 : next_section_idx]:
+        stripped = line.strip()
+        if "=" not in stripped:
+            continue
+        key, value = [part.strip().lower() for part in stripped.split("=", 1)]
+        if key in state:
+            state[key] = value.split("#", 1)[0].strip() == "true"
+    return state
+
+
+def _repair_codex_setup(project_dir: str) -> dict:
+    """Rewrite Codex hook wiring for an existing ARH project."""
+    settings_path = os.path.join(project_dir, ".arh", "settings.json")
+    settings = {}
+    if os.path.isfile(settings_path):
+        try:
+            settings = json.loads(open(settings_path).read())
+        except (OSError, json.JSONDecodeError):
+            settings = {}
+
+    project_id = settings.get("project_id")
+    if not project_id:
+        return {
+            "applied": False,
+            "error": ".arh/settings.json does not contain an ARH project_id; run `arh handoff` first.",
+        }
+
+    status_path = os.path.join(project_dir, ".arh", "adapter-status.json")
+    previous_status = {}
+    if os.path.isfile(status_path):
+        try:
+            previous_status = json.loads(open(status_path).read())
+        except (OSError, json.JSONDecodeError):
+            previous_status = {}
+
+    hook_path, config_path = _install_codex_hooks(project_dir)
+    status = _runtime_adapter_status(
+        "codex",
+        "installed_unverified",
+        requested_runtime=str(previous_status.get("requested_runtime") or "codex"),
+        resolved_runtime="codex",
+        files={
+            "hooks": os.path.relpath(hook_path, project_dir),
+            "config": os.path.relpath(config_path, project_dir),
+            "workflow": ".arh/ARH.md",
+            "agent_instructions": "AGENTS.md",
+        },
+    )
+    status["native_hooks_installed"] = True
+    status["native_hooks_verified"] = False
+    status["native_hooks_observed_events"] = []
+    status["native_hooks_missing_events"] = list(CODEX_REQUIRED_HOOK_EVENTS)
+    status["verification_hint"] = (
+        "Start a new trusted Codex session in this repository. If Codex asks "
+        "to review project hooks, approve the ARH hook. Run `arh doctor codex` "
+        "again if no user/tool/session logs appear after the first turn."
+    )
+    written_status_path = _write_adapter_status(project_dir, status)
+
+    return {
+        "applied": True,
+        "project_id": project_id,
+        "hooks": os.path.relpath(hook_path, project_dir),
+        "config": os.path.relpath(config_path, project_dir),
+        "adapter_status": os.path.relpath(written_status_path, project_dir),
+        "status": "installed_unverified",
+    }
+
+
+def cmd_doctor_codex(args):
+    """Diagnose Codex hook setup without printing credentials."""
+    project_dir = _find_project_context_dir(getattr(args, "dir", "") or os.getcwd())
+    repair = None
+    if getattr(args, "fix", False):
+        try:
+            repair = _repair_codex_setup(project_dir)
+        except Exception as e:
+            repair = {"applied": False, "error": _redact_cli_text(str(e))}
+
+    codex_dir = os.path.join(project_dir, ".codex")
+    hooks_path = os.path.join(codex_dir, "hooks.json")
+    config_path = os.path.join(codex_dir, "config.toml")
+    status_path = os.path.join(project_dir, ".arh", "adapter-status.json")
+    settings_path = os.path.join(project_dir, ".arh", "settings.json")
+
+    version = "missing"
+    codex_bin = shutil.which("codex")
+    if codex_bin:
+        try:
+            result = subprocess.run(
+                ["codex", "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                version = result.stdout.strip().splitlines()[0]
+            else:
+                version = "error"
+        except (OSError, subprocess.TimeoutExpired):
+            version = "error"
+
+    feature_state = _codex_hooks_feature_state(config_path)
+    hooks_events: list[str] = []
+    hooks_has_arh = False
+    hooks_missing_events = list(CODEX_REQUIRED_HOOK_EVENTS)
+    if os.path.isfile(hooks_path):
+        try:
+            hooks_json = json.loads(open(hooks_path).read())
+            hooks = hooks_json.get("hooks", {}) if isinstance(hooks_json, dict) else {}
+            if isinstance(hooks, dict):
+                hooks_events = sorted(hooks)
+                hooks_missing_events = []
+                for event in CODEX_REQUIRED_HOOK_EVENTS:
+                    event_entries = hooks.get(event, [])
+                    event_has_arh = "codex-hook-handler.py" in json.dumps(event_entries)
+                    if not event_has_arh:
+                        hooks_missing_events.append(event)
+                hooks_has_arh = not hooks_missing_events
+        except (OSError, json.JSONDecodeError):
+            hooks_events = ["<invalid json>"]
+
+    settings = {}
+    if os.path.isfile(settings_path):
+        try:
+            settings = json.loads(open(settings_path).read())
+        except (OSError, json.JSONDecodeError):
+            settings = {}
+    adapter_status = {}
+    if os.path.isfile(status_path):
+        try:
+            raw_status = json.loads(open(status_path).read())
+            adapter_status = {
+                "selected_adapter": raw_status.get("selected_adapter"),
+                "status": raw_status.get("status"),
+                "degraded": raw_status.get("degraded"),
+                "degraded_reason": _redact_cli_text(str(raw_status.get("degraded_reason", ""))),
+                "native_hooks_installed": raw_status.get("native_hooks_installed"),
+                "native_hooks_verified": raw_status.get("native_hooks_verified"),
+                "native_hooks_observed_events": raw_status.get("native_hooks_observed_events", []),
+                "native_hooks_missing_events": raw_status.get("native_hooks_missing_events", []),
+                "last_hook_event_name": raw_status.get("last_hook_event_name"),
+                "last_hook_event_at": raw_status.get("last_hook_event_at"),
+            }
+        except (OSError, json.JSONDecodeError):
+            adapter_status = {"status": "invalid_json"}
+
+    issues: list[str] = []
+    if version == "missing":
+        issues.append("Codex CLI is not on PATH.")
+    if not feature_state["hooks"]:
+        issues.append(".codex/config.toml does not enable [features].hooks = true.")
+    if feature_state["codex_hooks"]:
+        issues.append(".codex/config.toml still contains deprecated [features].codex_hooks.")
+    if not hooks_has_arh:
+        issues.append(
+            ".codex/hooks.json is missing ARH handlers for: "
+            + ", ".join(hooks_missing_events)
+        )
+    if not settings.get("project_id"):
+        issues.append(".arh/settings.json does not contain an ARH project_id.")
+    if adapter_status.get("status") == "installed_unverified":
+        issues.append(
+            "Codex hooks are installed but not verified yet. Start a trusted Codex "
+            "session in this repository and approve hook review if Codex asks."
+        )
+    if adapter_status.get("status") == "installed_partial":
+        missing = adapter_status.get("native_hooks_missing_events") or []
+        issues.append(
+            "Codex hooks are partially verified; missing observed events: "
+            + ", ".join(str(item) for item in missing)
+        )
+    if adapter_status.get("degraded"):
+        issues.append(str(adapter_status.get("degraded_reason") or "Adapter is degraded."))
+
+    report = {
+        "runtime": "codex",
+        "project_dir": project_dir,
+        "codex_version": version,
+        "features": feature_state,
+        "hooks_file": {
+            "exists": os.path.isfile(hooks_path),
+            "events": hooks_events,
+            "has_arh_handler": hooks_has_arh,
+            "missing_arh_handler_events": hooks_missing_events,
+        },
+        "project_context": {
+            "settings_exists": os.path.isfile(settings_path),
+            "has_project_id": bool(settings.get("project_id")),
+        },
+        "adapter_status": adapter_status,
+        "issues": issues,
+        "ok": not issues,
+    }
+    if repair is not None:
+        report["fix"] = repair
+    print(json.dumps(report, indent=2, sort_keys=True))
 
 
 def _persist_credentials(api_key: str, api_url: str):
@@ -2575,6 +2850,23 @@ def main():
         help="Comma-separated exclude patterns (e.g. '.git,node_modules')",
     )
     p_observe.set_defaults(func=cmd_observe)
+
+    # --- doctor ---
+    p_doctor = subparsers.add_parser("doctor", help="Diagnose local ARH setup")
+    doctor_sub = p_doctor.add_subparsers(dest="doctor_command")
+
+    p_doctor_codex = doctor_sub.add_parser(
+        "codex", help="Diagnose Codex ARH hook setup"
+    )
+    p_doctor_codex.add_argument(
+        "--dir", default=".", help="Project directory to inspect"
+    )
+    p_doctor_codex.add_argument(
+        "--fix",
+        action="store_true",
+        help="Repair Codex ARH hook wiring for an existing project without creating a new project",
+    )
+    p_doctor_codex.set_defaults(func=cmd_doctor_codex)
 
     # --- session ---
     p_session = subparsers.add_parser("session", help="Session management commands")

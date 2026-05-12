@@ -30,6 +30,7 @@ MAX_THINKING_LENGTH = 5000
 _SHADOW_REF_PREFIX = "refs/heads/arh-auto"
 _AUTO_CHECKPOINT_THROTTLE_SECONDS = 30
 _AUTO_CHECKPOINT_STATE_FILE = ".arh/.auto-checkpoint-state"
+CODEX_REQUIRED_HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop")
 
 
 def read_json_file(path: Path) -> dict[str, Any]:
@@ -59,15 +60,41 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
+def project_context_dir(cwd: Path) -> Path:
+    """Return the nearest ancestor that contains ARH project context."""
+    current = cwd.expanduser().resolve()
+    if current.is_file():
+        current = current.parent
+    for candidate in (current, *current.parents):
+        arh_dir = candidate / ".arh"
+        if any(
+            (arh_dir / marker).exists()
+            for marker in ("settings.json", ".env", "ARH.md", "adapter-status.json")
+        ):
+            return candidate
+    return current
+
+
+def has_project_context(cwd: Path) -> bool:
+    project_dir = project_context_dir(cwd)
+    arh_dir = project_dir / ".arh"
+    return any(
+        (arh_dir / marker).exists()
+        for marker in ("settings.json", ".env", "ARH.md", "adapter-status.json")
+    )
+
+
 def _valid_api_key(value: str) -> bool:
     return value.startswith("arh_sk_") and "${" not in value
 
 
 def load_context(cwd: Path) -> dict[str, str]:
+    project_dir = project_context_dir(cwd)
+    project_context_found = has_project_context(project_dir)
     creds = read_json_file(Path.home() / ".arh" / "credentials")
-    project_env = read_env_file(cwd / ".arh" / ".env")
-    project_settings = read_json_file(cwd / ".arh" / "settings.json")
-    trace_file = read_json_file(cwd / ".arh-trace")
+    project_env = read_env_file(project_dir / ".arh" / ".env")
+    project_settings = read_json_file(project_dir / ".arh" / "settings.json")
+    trace_file = read_json_file(project_dir / ".arh-trace")
     stored_api_key = creds.get("api_key") if isinstance(creds.get("api_key"), str) else ""
     has_stored_key = _valid_api_key(stored_api_key)
 
@@ -75,7 +102,10 @@ def load_context(cwd: Path) -> dict[str, str]:
         "api_url": DEFAULT_API_URL,
         "api_key": "",
         "project_id": "",
+        "project_id_source": "",
         "trace_id": "",
+        "project_dir": str(project_dir),
+        "project_context_found": "true" if project_context_found else "false",
     }
     if isinstance(creds.get("api_url"), str):
         context["api_url"] = creds["api_url"]
@@ -85,10 +115,12 @@ def load_context(cwd: Path) -> dict[str, str]:
         context["api_url"] = project_env["ARH_API_URL"]
     if project_env.get("ARH_PROJECT_ID"):
         context["project_id"] = project_env["ARH_PROJECT_ID"]
+        context["project_id_source"] = "project_env"
     if project_env.get("ARH_TRACE_ID"):
         context["trace_id"] = project_env["ARH_TRACE_ID"]
     if isinstance(project_settings.get("project_id"), str):
         context["project_id"] = project_settings["project_id"]
+        context["project_id_source"] = "settings"
     if isinstance(trace_file.get("trace_id"), str):
         context["trace_id"] = trace_file["trace_id"]
 
@@ -97,13 +129,17 @@ def load_context(cwd: Path) -> dict[str, str]:
     env_api_key = os.environ.get("ARH_API_KEY", "")
     if _valid_api_key(env_api_key) and not context["api_key"]:
         context["api_key"] = env_api_key
-    context["project_id"] = os.environ.get("ARH_PROJECT_ID", context["project_id"])
+    env_project_id = os.environ.get("ARH_PROJECT_ID", "")
+    if env_project_id and not context["project_id"]:
+        context["project_id"] = env_project_id
+        context["project_id_source"] = "env"
     context["trace_id"] = os.environ.get("ARH_TRACE_ID", context["trace_id"])
     return context
 
 
 def write_project_id(cwd: Path, project_id: str) -> None:
-    arh_dir = cwd / ".arh"
+    project_dir = project_context_dir(cwd)
+    arh_dir = project_dir / ".arh"
     arh_dir.mkdir(exist_ok=True)
     settings_path = arh_dir / "settings.json"
     settings = read_json_file(settings_path)
@@ -114,16 +150,69 @@ def write_project_id(cwd: Path, project_id: str) -> None:
 
 
 def read_settings(cwd: Path) -> dict[str, Any]:
-    return read_json_file(cwd / ".arh" / "settings.json")
+    return read_json_file(project_context_dir(cwd) / ".arh" / "settings.json")
 
 
 def write_settings(cwd: Path, updates: dict[str, Any]) -> None:
-    arh_dir = cwd / ".arh"
+    project_dir = project_context_dir(cwd)
+    arh_dir = project_dir / ".arh"
     arh_dir.mkdir(exist_ok=True)
     settings_path = arh_dir / "settings.json"
     settings = read_json_file(settings_path)
     settings.update({key: value for key, value in updates.items() if value is not None})
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+
+
+def _write_adapter_status(cwd: Path, updates: dict[str, Any]) -> None:
+    status_path = project_context_dir(cwd) / ".arh" / "adapter-status.json"
+    if not status_path.is_file():
+        return
+    status = read_json_file(status_path)
+    if not status:
+        return
+    status.update(updates)
+    status["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    try:
+        status_path.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def mark_adapter_status_verified(cwd: Path, runtime: str, event_name: str) -> None:
+    if runtime != "codex":
+        return
+    status_path = project_context_dir(cwd) / ".arh" / "adapter-status.json"
+    current = read_json_file(status_path)
+    observed = set(current.get("native_hooks_observed_events") or [])
+    observed.add(event_name)
+    missing = [event for event in CODEX_REQUIRED_HOOK_EVENTS if event not in observed]
+    fully_verified = not missing
+    _write_adapter_status(
+        cwd,
+        {
+            "status": "installed" if fully_verified else "installed_partial",
+            "degraded": False,
+            "degraded_reason": "",
+            "native_hooks_installed": True,
+            "native_hooks_verified": fully_verified,
+            "native_hooks_observed_events": sorted(observed),
+            "native_hooks_missing_events": missing,
+            "last_hook_event_name": event_name,
+            "last_hook_event_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+    )
+
+
+def mark_adapter_status_degraded(cwd: Path, reason: str) -> None:
+    _write_adapter_status(
+        cwd,
+        {
+            "status": "degraded",
+            "degraded": True,
+            "degraded_reason": reason,
+            "native_hooks_verified": False,
+        },
+    )
 
 
 def truncate(value: str, max_length: int = MAX_OUTPUT_LENGTH) -> str:

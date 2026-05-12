@@ -106,7 +106,7 @@ For Codex, use the native hook path as the primary setup:
 
 ```bash
 uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
-  arh track-research "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff
+  arh handoff "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff
 ```
 
 This creates an ARH project, writes project context to `.arh/`, installs the git
@@ -117,13 +117,35 @@ plus `.codex/config.toml`. Codex then sends `SessionStart`, `UserPromptSubmit`,
 If you already installed the bundled client globally, the shorter form is:
 
 ```bash
-arh track-research "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff
+arh handoff "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff
 ```
 
 Codex tracking is safe by default for public beta users: setup records the
 project context and hooks, but it does not auto-install dependencies and does
 not auto-commit or push local changes. Use `--codex-commit-mode handoff` when
 you want Stop events to log a completion without claiming a durable git commit.
+
+Codex project-local hooks are trust-gated by Codex. Setup can report
+`installed_unverified` until a real Codex hook event reaches ARH. Start a
+trusted Codex session in the repository, approve ARH hook review if Codex asks,
+and run `arh doctor codex` if user/tool/session rows do not appear after the
+first post-setup turn.
+
+When diagnosing a landing-page setup, use the refreshed public client:
+
+```bash
+uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
+  arh doctor codex
+```
+
+If doctor reports deprecated `codex_hooks` or missing ARH handlers for an
+existing project, repair the local hook wiring without creating a new ARH
+project:
+
+```bash
+uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
+  arh doctor codex --fix
+```
 
 If you explicitly opt in with `--enable-auto-commit`, the Stop hook stages
 local changes, runs Gitleaks against the staged diff, auto-commits clean

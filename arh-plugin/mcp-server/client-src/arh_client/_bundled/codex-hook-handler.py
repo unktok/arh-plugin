@@ -85,6 +85,8 @@ def build_payload(
 ) -> dict[str, Any] | None:
     event_name = _event_name(args_event, hook)
     cwd = _cwd(hook)
+    if context.get("project_dir"):
+        cwd = Path(context["project_dir"])
     payload = _base_payload(event_name, hook, context, cwd)
 
     if event_name == "SessionStart":
@@ -321,12 +323,12 @@ def _write_hook_error(
     exc: RuntimeError,
 ) -> None:
     try:
-        arh_dir = cwd / ".arh"
+        arh_dir = hc.project_context_dir(cwd) / ".arh"
         arh_dir.mkdir(exist_ok=True)
         record = {
             "event_name": event_name,
             "payload_event_name": payload.get("event_name"),
-            "error": str(exc),
+            "error": hc.truncate(str(exc)),
         }
         with (arh_dir / "hook-errors.log").open("a") as f:
             f.write(json.dumps(record, sort_keys=True) + "\n")
@@ -353,11 +355,13 @@ def send_payloads(
         except RuntimeError as exc:
             last_error = exc
             if _is_primary_payload(payload):
-                print(f"[arh] Codex hook event failed: {exc}", file=sys.stderr)
+                print(f"[arh] Codex hook event failed: {hc.truncate(str(exc))}", file=sys.stderr)
             else:
                 _write_hook_error(cwd, event_name, payload, exc)
     if last_error and not sent_primary:
         _write_hook_error(cwd, event_name, payloads[0], last_error)
+    if sent_primary:
+        hc.mark_adapter_status_verified(cwd, "codex", event_name)
     return sent_primary
 
 
@@ -378,7 +382,22 @@ def main() -> int:
     cwd = _cwd(hook)
     context = hc.load_context(cwd)
     event_name = _event_name(args.event_name, hook)
-    commit_result = None if args.dry_run else _maybe_auto_commit(cwd, hook, event_name)
+    project_dir = Path(context.get("project_dir") or str(cwd))
+    if context.get("project_id_source") not in {"settings", "project_env"}:
+        reason = (
+            "Codex hook missing ARH project context; rerun `arh handoff` "
+            "from the tracked project root or run `arh doctor codex`."
+        )
+        hc.mark_adapter_status_degraded(project_dir, reason)
+        _write_hook_error(
+            project_dir,
+            event_name,
+            {"event_name": "missing_project_context"},
+            RuntimeError(reason),
+        )
+        print(f"[arh] Codex hook ignored: {reason}", file=sys.stderr)
+        return 0
+    commit_result = None if args.dry_run else _maybe_auto_commit(project_dir, hook, event_name)
     payloads = build_payloads(
         args.event_name,
         hook,
@@ -397,7 +416,7 @@ def main() -> int:
         )
         return 0
 
-    send_payloads(payloads, context, cwd, event_name)
+    send_payloads(payloads, context, project_dir, event_name)
     return 0
 
 

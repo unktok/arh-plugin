@@ -63,7 +63,11 @@ def test_install_codex_hooks_creates_project_local_config(tmp_path: Path, monkey
         "Stop",
     }
     assert "codex-hook-handler.py" in hooks["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
-    assert Path(config_path).read_text() == "[features]\ncodex_hooks = true\n"
+    config_text = Path(config_path).read_text()
+    hooks_text = Path(hooks_path).read_text()
+    assert config_text == "[features]\nhooks = true\n"
+    assert "ARH_API_KEY" not in hooks_text
+    assert "arh_sk_" not in hooks_text
 
 
 def test_register_persists_effective_client_base_url(tmp_path: Path, monkeypatch, capsys):
@@ -273,8 +277,169 @@ def test_enable_codex_hooks_feature_updates_existing_config(tmp_path: Path):
     cli._enable_codex_hooks_feature(str(config_path))
 
     assert config_path.read_text() == (
-        'model = "gpt-5.4"\n\n[features]\ncodex_hooks = true\nfoo = true\n'
+        'model = "gpt-5.4"\n\n[features]\nhooks = true\nfoo = true\n'
     )
+
+
+def test_enable_codex_hooks_feature_migrates_deprecated_flag(tmp_path: Path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        'hooks = "/tmp/not-a-feature-hooks-path"\n\n'
+        "[features]\n"
+        "codex_hooks = true\n"
+        "foo = true\n\n"
+        "[hooks]\n"
+        'example = "preserve"\n'
+    )
+
+    cli._enable_codex_hooks_feature(str(config_path))
+    cli._enable_codex_hooks_feature(str(config_path))
+
+    assert config_path.read_text() == (
+        'hooks = "/tmp/not-a-feature-hooks-path"\n\n'
+        "[features]\n"
+        "hooks = true\n"
+        "foo = true\n\n"
+        "[hooks]\n"
+        'example = "preserve"\n'
+    )
+
+
+def test_doctor_codex_reports_unverified_setup_without_secrets(
+    tmp_path: Path, monkeypatch, capsys
+):
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    (tmp_path / ".arh").mkdir()
+    (tmp_path / ".arh" / "settings.json").write_text(
+        json.dumps({"project_id": "00000000-0000-0000-0000-000000000001"})
+    )
+    (tmp_path / ".arh" / "adapter-status.json").write_text(
+        json.dumps(
+            {
+                "selected_adapter": "codex",
+                "status": "installed_unverified",
+                "degraded": False,
+                "native_hooks_installed": True,
+                "native_hooks_verified": False,
+                "degraded_reason": "arh_sk_should_not_be_here",
+            }
+        )
+    )
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "config.toml").write_text("[features]\nhooks = true\n")
+    (tmp_path / ".codex" / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PostToolUse": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 /tmp/codex-hook-handler.py PostToolUse",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+    )
+
+    args = type("Args", (), {"dir": str(tmp_path)})()
+    cli.cmd_doctor_codex(args)
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["features"]["hooks"] is True
+    assert report["adapter_status"]["status"] == "installed_unverified"
+    assert "arh_sk_should_not_be_here" not in json.dumps(report)
+
+
+def test_doctor_codex_fix_repairs_deprecated_hook_config(
+    tmp_path: Path, monkeypatch, capsys
+):
+    handler = tmp_path / "fresh-codex-hook-handler.py"
+    handler.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+
+    (tmp_path / ".arh").mkdir()
+    (tmp_path / ".arh" / "settings.json").write_text(
+        json.dumps({"project_id": "00000000-0000-0000-0000-000000000001"})
+    )
+    (tmp_path / ".arh" / "adapter-status.json").write_text(
+        json.dumps(
+            {
+                "selected_adapter": "codex",
+                "requested_runtime": "auto",
+                "status": "installed",
+                "degraded": False,
+            }
+        )
+    )
+    (tmp_path / ".codex").mkdir()
+    (tmp_path / ".codex" / "config.toml").write_text(
+        "[features]\ncodex_hooks = true\nfoo = true\n"
+    )
+    (tmp_path / ".codex" / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PostToolUse": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "python3 /old/codex-hook-handler.py PostToolUse",
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+    )
+
+    args = type("Args", (), {"dir": str(tmp_path), "fix": True})()
+    cli.cmd_doctor_codex(args)
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["fix"]["applied"] is True
+    assert report["features"] == {"codex_hooks": False, "hooks": True}
+    assert report["hooks_file"]["has_arh_handler"] is True
+    assert report["adapter_status"]["status"] == "installed_unverified"
+    assert report["adapter_status"]["native_hooks_missing_events"] == list(
+        cli.CODEX_REQUIRED_HOOK_EVENTS
+    )
+
+    config_text = (tmp_path / ".codex" / "config.toml").read_text()
+    assert "hooks = true" in config_text
+    assert "codex_hooks" not in config_text
+    hooks_text = (tmp_path / ".codex" / "hooks.json").read_text()
+    assert "fresh-codex-hook-handler.py" in hooks_text
+    assert "/old/codex-hook-handler.py" not in hooks_text
+
+
+def test_doctor_codex_fix_requires_existing_project_id(tmp_path: Path, capsys):
+    (tmp_path / ".arh").mkdir()
+    args = type("Args", (), {"dir": str(tmp_path), "fix": True})()
+
+    cli.cmd_doctor_codex(args)
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["fix"]["applied"] is False
+    assert "project_id" in report["fix"]["error"]
+    assert not (tmp_path / ".codex" / "config.toml").exists()
+
+
+def test_find_project_context_dir_ignores_global_credentials_dir(tmp_path: Path):
+    home = tmp_path / "home"
+    workspace = home / "work"
+    workspace.mkdir(parents=True)
+    (home / ".arh").mkdir()
+    (home / ".arh" / "credentials").write_text("{}")
+
+    assert cli._find_project_context_dir(str(workspace)) == str(workspace)
 
 
 def test_read_credentials_uses_arh_credentials_file(tmp_path: Path, monkeypatch):
@@ -579,14 +744,9 @@ def test_cmd_handoff_uses_safe_codex_handoff_mode(monkeypatch, tmp_path: Path, c
 
     def fake_setup(args):
         calls.append(("setup", args.runtime, args.codex_commit_mode))
-        return "project-1", {"claude_hooks": False}
-
-    def fake_codex_hooks(project_dir):
-        calls.append(("codex_hooks", project_dir))
-        return str(tmp_path / ".codex" / "hooks.json"), str(tmp_path / ".codex" / "config.toml")
+        return "project-1", {"claude_hooks": False, "codex_hooks": True}
 
     monkeypatch.setattr(cli, "_run_research_setup", fake_setup)
-    monkeypatch.setattr(cli, "_install_codex_hooks", fake_codex_hooks)
     monkeypatch.setattr(cli, "_print_research_setup_summary", lambda *args: None)
     args = type(
         "Args",
@@ -603,6 +763,5 @@ def test_cmd_handoff_uses_safe_codex_handoff_mode(monkeypatch, tmp_path: Path, c
 
     assert calls == [
         ("setup", "codex", "handoff"),
-        ("codex_hooks", str(tmp_path)),
     ]
     assert capsys.readouterr().out.strip() == "project-1"
