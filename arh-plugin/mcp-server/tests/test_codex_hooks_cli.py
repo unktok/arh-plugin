@@ -70,6 +70,229 @@ def test_install_codex_hooks_creates_project_local_config(tmp_path: Path, monkey
     assert "arh_sk_" not in hooks_text
 
 
+def test_codex_handler_lookup_ignores_repo_local_handler(
+    tmp_path: Path, monkeypatch
+):
+    repo_handler = tmp_path / "arh-plugin" / "scripts" / "codex-hook-handler.py"
+    repo_handler.parent.mkdir(parents=True)
+    repo_handler.write_text("#!/usr/bin/env python3\nraise SystemExit('malicious')\n")
+    env_handler = tmp_path / "env-plugin" / "scripts" / "codex-hook-handler.py"
+    env_handler.parent.mkdir(parents=True)
+    env_handler.write_text("#!/usr/bin/env python3\nraise SystemExit('malicious')\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ARH_PLUGIN_ROOT", str(env_handler.parent.parent))
+
+    selected = cli._find_codex_hook_handler()
+
+    assert selected
+    assert Path(selected).resolve() != repo_handler.resolve()
+    assert Path(selected).resolve() != env_handler.resolve()
+
+
+def test_redact_cli_text_removes_credentials_and_local_paths():
+    text = (
+        "failed at /Users/alice/project/.codex/config.toml and "
+        "/private/var/folders/example with arh_sk_secret_value"
+    )
+
+    redacted = cli._redact_cli_text(text)
+
+    assert "arh_sk_secret_value" not in redacted
+    assert "/Users/alice" not in redacted
+    assert "/private/var" not in redacted
+    assert "~/" not in redacted
+
+
+def test_codex_hook_hash_matches_codex_discovery_shape():
+    command = (
+        "python3 /opt/arh/arh_client/_bundled/codex-hook-handler.py PostToolUse"
+    )
+
+    assert cli._codex_normalized_hook_hash(
+        "PostToolUse",
+        ".*",
+        command,
+        {"type": "command", "command": command},
+    ) == "sha256:b640052d9c1269e2f1ab722b3b8660ce1ac48e63713ea4396ac974e1ed434145"
+
+
+def test_confirm_codex_hook_trust_writes_user_config(
+    tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    handler = tmp_path / "codex-hook-handler.py"
+    handler.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
+
+    cli._install_codex_hooks(str(tmp_path))
+    report = cli._ensure_codex_hook_trust(str(tmp_path))
+
+    assert report["project_trusted"] is True
+    assert report["all_trusted"] is True
+    assert report["missing_trusted_events"] == []
+    config_text = (home / ".codex" / "config.toml").read_text()
+    assert f'[projects."{tmp_path}"]' in config_text
+    assert "trust_level = \"trusted\"" in config_text
+    assert "hooks.state" in config_text
+    assert "trusted_hash = \"sha256:" in config_text
+    assert "ARH_API_KEY" not in config_text
+    assert "arh_sk_" not in config_text
+
+
+def test_confirm_codex_hook_trust_updates_inline_toml_config(
+    tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    config_path = home / ".codex" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        'model = "gpt-5.4"\n'
+        'projects = { "/existing" = { trust_level = "trusted" } }\n'
+        'hooks = { state = { "old:key" = { trusted_hash = "sha256:old" } } }\n'
+    )
+    monkeypatch.setenv("HOME", str(home))
+    handler = tmp_path / "codex-hook-handler.py"
+    handler.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
+
+    cli._install_codex_hooks(str(tmp_path))
+    report = cli._ensure_codex_hook_trust(str(tmp_path))
+
+    assert report["all_trusted"] is True
+    parsed = cli._load_toml_config(str(config_path))
+    assert parsed["model"] == "gpt-5.4"
+    assert parsed["projects"]["/existing"]["trust_level"] == "trusted"
+    assert parsed["projects"][str(tmp_path)]["trust_level"] == "trusted"
+    assert parsed["hooks"]["state"]["old:key"]["trusted_hash"] == "sha256:old"
+    assert len(report["trusted_events"]) == len(cli.CODEX_REQUIRED_HOOK_EVENTS)
+
+
+def test_confirm_codex_hook_trust_rejects_scalar_toml_conflict(
+    tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    config_path = home / ".codex" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text('hooks = "/tmp/not-a-table"\n')
+    monkeypatch.setenv("HOME", str(home))
+    handler = tmp_path / "codex-hook-handler.py"
+    handler.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
+
+    cli._install_codex_hooks(str(tmp_path))
+    with pytest.raises(ValueError, match="hooks"):
+        cli._ensure_codex_hook_trust(str(tmp_path))
+
+    parsed = cli._load_toml_config(str(config_path))
+    assert parsed["hooks"] == "/tmp/not-a-table"
+
+
+def test_codex_hook_trust_report_detects_untrusted_hooks(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    handler = tmp_path / "codex-hook-handler.py"
+    handler.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
+
+    cli._install_codex_hooks(str(tmp_path))
+    report = cli._codex_hook_trust_report(str(tmp_path))
+
+    assert report["project_trusted"] is False
+    assert report["all_trusted"] is False
+    assert report["missing_trusted_events"] == list(cli.CODEX_REQUIRED_HOOK_EVENTS)
+
+
+def test_codex_hook_trust_entries_ignore_suffix_impostor(
+    tmp_path: Path, monkeypatch
+):
+    current_handler = tmp_path / "package" / "codex-hook-handler.py"
+    current_handler.parent.mkdir()
+    current_handler.write_text("#!/usr/bin/env python3\n")
+    impostor = tmp_path / "repo" / "arh-plugin" / "scripts" / "codex-hook-handler.py"
+    impostor.parent.mkdir(parents=True)
+    impostor.write_text("#!/usr/bin/env python3\nraise SystemExit('malicious')\n")
+    monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(current_handler))
+    hooks_dir = tmp_path / ".codex"
+    hooks_dir.mkdir()
+    (hooks_dir / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PostToolUse": [
+                        {
+                            "matcher": ".*",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": f"python3 {impostor} PostToolUse",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        )
+    )
+
+    assert cli._codex_arh_hook_trust_entries(str(tmp_path)) == []
+
+
+def test_codex_hook_trust_report_requires_project_trust(
+    tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    handler = tmp_path / "codex-hook-handler.py"
+    handler.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
+
+    cli._install_codex_hooks(str(tmp_path))
+    for entry in cli._codex_arh_hook_trust_entries(str(tmp_path)):
+        cli._ensure_toml_nested_key(
+            str(home / ".codex" / "config.toml"),
+            ["hooks", "state", entry["key"]],
+            "trusted_hash",
+            entry["trusted_hash"],
+        )
+
+    report = cli._codex_hook_trust_report(str(tmp_path))
+    assert report["project_trusted"] is False
+    assert report["missing_trusted_events"] == []
+    assert report["all_trusted"] is False
+    assert cli._codex_installed_status_from_trust(report) == "installed_untrusted"
+
+
+def test_codex_hook_trust_report_separates_modified_hashes(
+    tmp_path: Path, monkeypatch
+):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    handler = tmp_path / "codex-hook-handler.py"
+    handler.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
+
+    cli._install_codex_hooks(str(tmp_path))
+    cli._ensure_codex_project_trust(str(tmp_path))
+    post_tool_entry = next(
+        entry
+        for entry in cli._codex_arh_hook_trust_entries(str(tmp_path))
+        if entry["event"] == "PostToolUse"
+    )
+    cli._ensure_toml_nested_key(
+        str(home / ".codex" / "config.toml"),
+        ["hooks", "state", post_tool_entry["key"]],
+        "trusted_hash",
+        "sha256:stale",
+    )
+
+    report = cli._codex_hook_trust_report(str(tmp_path))
+    assert "PostToolUse" in report["modified_events"]
+    assert "PostToolUse" not in report["missing_trusted_events"]
+    assert report["all_trusted"] is False
+
+
 def test_register_persists_effective_client_base_url(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("ARH_API_URL", raising=False)
@@ -229,6 +452,9 @@ def test_install_codex_hooks_preserves_unrelated_hooks(tmp_path: Path, monkeypat
     handler = tmp_path / "codex-hook-handler.py"
     handler.write_text("#!/usr/bin/env python3\n")
     monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
+    stale_arh_handler = tmp_path.parent / f"{tmp_path.name}-uv-cache" / "arh_client" / "_bundled" / "codex-hook-handler.py"
+    stale_arh_handler.parent.mkdir(parents=True)
+    stale_arh_handler.write_text("#!/usr/bin/env python3\n")
     codex_dir = tmp_path / ".codex"
     codex_dir.mkdir()
     hooks_path = codex_dir / "hooks.json"
@@ -243,6 +469,15 @@ def test_install_codex_hooks_preserves_unrelated_hooks(tmp_path: Path, monkeypat
                                 {
                                     "type": "command",
                                     "command": "python3 /old/codex-hook-handler.py PostToolUse",
+                                }
+                            ],
+                        },
+                        {
+                            "matcher": ".*",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": f"python3 {stale_arh_handler} PostToolUse",
                                 }
                             ],
                         },
@@ -265,9 +500,12 @@ def test_install_codex_hooks_preserves_unrelated_hooks(tmp_path: Path, monkeypat
 
     hooks = json.loads(hooks_path.read_text())["hooks"]["PostToolUse"]
     commands = [entry["hooks"][0]["command"] for entry in hooks]
+    assert len(hooks) == 3
     assert "python3 ./local-audit.py" in commands
-    assert not any("/old/codex-hook-handler.py" in command for command in commands)
-    assert sum("codex-hook-handler.py" in command for command in commands) == 1
+    assert any("/old/codex-hook-handler.py" in command for command in commands)
+    assert not any(str(stale_arh_handler) in command for command in commands)
+    assert any(str(handler) in command for command in commands)
+    assert commands.index("python3 ./local-audit.py") == 2
 
 
 def test_enable_codex_hooks_feature_updates_existing_config(tmp_path: Path):
@@ -309,6 +547,9 @@ def test_doctor_codex_reports_unverified_setup_without_secrets(
     tmp_path: Path, monkeypatch, capsys
 ):
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    monkeypatch.setattr(
+        cli, "_find_codex_hook_handler", lambda: "/tmp/codex-hook-handler.py"
+    )
     (tmp_path / ".arh").mkdir()
     (tmp_path / ".arh" / "settings.json").write_text(
         json.dumps({"project_id": "00000000-0000-0000-0000-000000000001"})
@@ -352,7 +593,10 @@ def test_doctor_codex_reports_unverified_setup_without_secrets(
     report = json.loads(capsys.readouterr().out)
     assert report["features"]["hooks"] is True
     assert report["adapter_status"]["status"] == "installed_unverified"
-    assert "arh_sk_should_not_be_here" not in json.dumps(report)
+    report_text = json.dumps(report)
+    assert "arh_sk_should_not_be_here" not in report_text
+    assert str(tmp_path) not in report_text
+    assert "user_config" not in report["hook_trust"]
 
 
 def test_doctor_codex_fix_repairs_deprecated_hook_config(
@@ -360,6 +604,9 @@ def test_doctor_codex_fix_repairs_deprecated_hook_config(
 ):
     handler = tmp_path / "fresh-codex-hook-handler.py"
     handler.write_text("#!/usr/bin/env python3\n")
+    stale_arh_handler = tmp_path.parent / f"{tmp_path.name}-uv-cache" / "arh_client" / "_bundled" / "codex-hook-handler.py"
+    stale_arh_handler.parent.mkdir(parents=True)
+    stale_arh_handler.write_text("#!/usr/bin/env python3\n")
     monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
 
@@ -390,7 +637,7 @@ def test_doctor_codex_fix_repairs_deprecated_hook_config(
                             "hooks": [
                                 {
                                     "type": "command",
-                                    "command": "python3 /old/codex-hook-handler.py PostToolUse",
+                                    "command": f"python3 {stale_arh_handler} PostToolUse",
                                 }
                             ]
                         }
@@ -400,14 +647,18 @@ def test_doctor_codex_fix_repairs_deprecated_hook_config(
         )
     )
 
-    args = type("Args", (), {"dir": str(tmp_path), "fix": True})()
+    args = type(
+        "Args",
+        (),
+        {"dir": str(tmp_path), "fix": True, "confirm_codex_hook_trust": False},
+    )()
     cli.cmd_doctor_codex(args)
 
     report = json.loads(capsys.readouterr().out)
     assert report["fix"]["applied"] is True
     assert report["features"] == {"codex_hooks": False, "hooks": True}
     assert report["hooks_file"]["has_arh_handler"] is True
-    assert report["adapter_status"]["status"] == "installed_unverified"
+    assert report["adapter_status"]["status"] == "installed_untrusted"
     assert report["adapter_status"]["native_hooks_missing_events"] == list(
         cli.CODEX_REQUIRED_HOOK_EVENTS
     )
@@ -417,12 +668,49 @@ def test_doctor_codex_fix_repairs_deprecated_hook_config(
     assert "codex_hooks" not in config_text
     hooks_text = (tmp_path / ".codex" / "hooks.json").read_text()
     assert "fresh-codex-hook-handler.py" in hooks_text
-    assert "/old/codex-hook-handler.py" not in hooks_text
+    assert str(stale_arh_handler) not in hooks_text
+
+
+def test_doctor_codex_fix_can_trust_generated_hooks(
+    tmp_path: Path, monkeypatch, capsys
+):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    handler = tmp_path / "fresh-codex-hook-handler.py"
+    handler.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+
+    (tmp_path / ".arh").mkdir()
+    (tmp_path / ".arh" / "settings.json").write_text(
+        json.dumps({"project_id": "00000000-0000-0000-0000-000000000001"})
+    )
+
+    args = type(
+        "Args",
+        (),
+        {"dir": str(tmp_path), "fix": True, "confirm_codex_hook_trust": True},
+    )()
+    cli.cmd_doctor_codex(args)
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["fix"]["applied"] is True
+    assert report["fix"]["status"] == "installed_unverified"
+    assert report["hook_trust"]["all_trusted"] is True
+    assert (
+        "Codex hooks are trusted but not verified yet. Start a new Codex session in this repository and run one turn."
+        in report["issues"]
+    )
+    assert "trusted_hash" in (home / ".codex" / "config.toml").read_text()
 
 
 def test_doctor_codex_fix_requires_existing_project_id(tmp_path: Path, capsys):
     (tmp_path / ".arh").mkdir()
-    args = type("Args", (), {"dir": str(tmp_path), "fix": True})()
+    args = type(
+        "Args",
+        (),
+        {"dir": str(tmp_path), "fix": True, "confirm_codex_hook_trust": True},
+    )()
 
     cli.cmd_doctor_codex(args)
 

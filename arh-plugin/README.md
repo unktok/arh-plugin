@@ -106,18 +106,20 @@ For Codex, use the native hook path as the primary setup:
 
 ```bash
 uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
-  arh handoff "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff
+  arh handoff "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff --confirm-codex-hook-trust
 ```
 
 This creates an ARH project, writes project context to `.arh/`, installs the git
 post-commit hook when possible, and configures repo-local `.codex/hooks.json`
-plus `.codex/config.toml`. Codex then sends `SessionStart`, `UserPromptSubmit`,
-`PostToolUse`, and `Stop` events through `/v1/hooks/agent-event`.
+plus `.codex/config.toml`. It also writes Codex project/hook trust state to
+`~/.codex/config.toml` when `--confirm-codex-hook-trust` is present. Codex then
+sends `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` events
+through `/v1/hooks/agent-event`.
 
 If you already installed the bundled client globally, the shorter form is:
 
 ```bash
-arh handoff "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff
+arh handoff "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff --confirm-codex-hook-trust
 ```
 
 Codex tracking is safe by default for public beta users: setup records the
@@ -125,11 +127,14 @@ project context and hooks, but it does not auto-install dependencies and does
 not auto-commit or push local changes. Use `--codex-commit-mode handoff` when
 you want Stop events to log a completion without claiming a durable git commit.
 
-Codex project-local hooks are trust-gated by Codex. Setup can report
-`installed_unverified` until a real Codex hook event reaches ARH. Start a
-trusted Codex session in the repository, approve ARH hook review if Codex asks,
-and run `arh doctor codex` if user/tool/session rows do not appear after the
-first post-setup turn.
+Codex project-local hooks are trust-gated by Codex in two places: the
+repository must be trusted, and every hook command must have a matching
+`hooks.state.<key>.trusted_hash` entry in `~/.codex/config.toml`. ARH uses
+repo-local hooks rather than a global dispatcher because Codex supports project
+config layers and a global hook would start for unrelated Codex projects. Setup
+can report `installed_untrusted` if hook trust is missing, or
+`installed_unverified` if hook trust is present but no real hook event has
+reached ARH yet.
 
 When diagnosing a landing-page setup, use the refreshed public client:
 
@@ -144,7 +149,7 @@ project:
 
 ```bash
 uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
-  arh doctor codex --fix
+  arh doctor codex --fix --confirm-codex-hook-trust
 ```
 
 If you explicitly opt in with `--enable-auto-commit`, the Stop hook stages

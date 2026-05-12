@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -8,13 +9,30 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11 fallback
+    tomllib = None
 
 import httpx
+import tomlkit
 from dotenv import load_dotenv
 
 
 DEFAULT_API_URL = "https://api.airesearcherhub.com"
 CODEX_REQUIRED_HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop")
+CODEX_HOOK_EVENT_LABELS = {
+    "SessionStart": "session_start",
+    "UserPromptSubmit": "user_prompt_submit",
+    "PostToolUse": "post_tool_use",
+    "Stop": "stop",
+}
+CODEX_HOOK_EVENTS_WITH_MATCHERS = {
+    "SessionStart",
+    "PostToolUse",
+}
 PLACEHOLDER_AGENT_HANDLES = {
     "agent-handle",
     "agent_handle",
@@ -48,6 +66,14 @@ def _redact_cli_text(value: str) -> str:
     redacted = value
     for pattern, replacement in patterns:
         redacted = pattern.sub(replacement, redacted)
+    home = os.path.expanduser("~")
+    if home and home != "~":
+        redacted = re.sub(re.escape(home) + r"[^\s'\"`]*", "[LOCAL_PATH]", redacted)
+    redacted = re.sub(
+        r"(?<!:)(?<![\w.~/-])(?:~|/private/var|/var/folders|/tmp|/Users/[^/\s'\"`]+|/home/[^/\s'\"`]+)[^\s'\"`]*",
+        "[LOCAL_PATH]",
+        redacted,
+    )
     return redacted
 
 
@@ -446,11 +472,27 @@ def _install_runtime_adapter(
     if adapter == "codex":
         try:
             hook_path, config_path = _install_codex_hooks(os.getcwd())
-            print(f"Codex hooks installed: {hook_path}", file=sys.stderr)
-            print(f"Codex hooks enabled:   {config_path}", file=sys.stderr)
+            trust = (
+                _ensure_codex_hook_trust(os.getcwd())
+                if getattr(args, "confirm_codex_hook_trust", False)
+                else _codex_hook_trust_report(os.getcwd())
+            )
+            installed_status = _codex_installed_status_from_trust(trust)
+            print(
+                f"Codex hooks installed: {os.path.relpath(hook_path, os.getcwd())}",
+                file=sys.stderr,
+            )
+            print(
+                f"Codex hooks enabled:   {os.path.relpath(config_path, os.getcwd())}",
+                file=sys.stderr,
+            )
+            if trust.get("all_trusted"):
+                print("Codex hooks trusted:   yes", file=sys.stderr)
+            else:
+                print("Codex hooks trusted:   no", file=sys.stderr)
             status = _runtime_adapter_status(
                 adapter,
-                "installed_unverified",
+                installed_status,
                 requested_runtime=requested_runtime,
                 resolved_runtime=resolved_runtime,
                 files={
@@ -462,22 +504,21 @@ def _install_runtime_adapter(
             )
             status["native_hooks_installed"] = True
             status["native_hooks_verified"] = False
+            status["native_hooks_trusted"] = bool(trust.get("all_trusted"))
             status["native_hooks_observed_events"] = []
             status["native_hooks_missing_events"] = list(CODEX_REQUIRED_HOOK_EVENTS)
-            status["verification_hint"] = (
-                "Start a new trusted Codex session in this repository. If Codex "
-                "asks to review project hooks, approve the ARH hook. Run "
-                "`arh doctor codex` if no user/tool/session logs appear after "
-                "the first turn."
-            )
+            status["codex_project_trusted"] = bool(trust.get("project_trusted"))
+            status["codex_missing_trusted_hooks"] = trust.get("missing_trusted_events", [])
+            status["verification_hint"] = _codex_verification_hint(trust)
         except Exception as e:
-            print(f"Warning: failed to install Codex hooks: {e}", file=sys.stderr)
+            redacted_error = _redact_cli_text(str(e))
+            print(f"Warning: failed to install Codex hooks: {redacted_error}", file=sys.stderr)
             status = _runtime_adapter_status(
                 adapter,
                 "degraded",
                 requested_runtime=requested_runtime,
                 resolved_runtime=resolved_runtime,
-                degraded_reason=f"failed to install Codex hooks: {e}",
+                degraded_reason=f"failed to install Codex hooks: {redacted_error}",
                 files={
                     "workflow": ".arh/ARH.md",
                     "agent_instructions": "AGENTS.md",
@@ -1191,7 +1232,7 @@ def _run_research_setup(args):
         "codex_hooks": (
             adapter_status.get("selected_adapter") == "codex"
             and adapter_status.get("status")
-            in {"installed", "installed_unverified", "installed_partial"}
+            in {"installed", "installed_unverified", "installed_partial", "installed_untrusted"}
         ),
         "adapter_status": adapter_status,
         "gitleaks": gitleaks_ok,
@@ -1255,11 +1296,12 @@ def _print_research_setup_summary(args, project_id: str, summary: dict):
         codex_status = "skipped"
         if summary.get("codex_hooks"):
             adapter_status = summary.get("adapter_status") or {}
-            codex_status = (
-                "installed"
-                if adapter_status.get("native_hooks_verified")
-                else "installed; awaiting hook verification"
-            )
+            if adapter_status.get("native_hooks_verified"):
+                codex_status = "installed"
+            elif adapter_status.get("native_hooks_trusted"):
+                codex_status = "trusted; awaiting hook verification"
+            else:
+                codex_status = "installed; awaiting hook trust"
         print(
             f"  Codex Hooks: {codex_status}",
             file=sys.stderr,
@@ -1397,12 +1439,7 @@ def _find_hook_handler() -> str | None:
 
 def _find_codex_hook_handler() -> str | None:
     """Try to find the plugin's Codex hook handler."""
-    plugin_root = os.environ.get("ARH_PLUGIN_ROOT", "")
     candidates = [
-        os.path.join(plugin_root, "scripts", "codex-hook-handler.py")
-        if plugin_root
-        else "",
-        os.path.join(os.getcwd(), "arh-plugin", "scripts", "codex-hook-handler.py"),
         os.path.join(
             os.path.dirname(
                 os.path.dirname(
@@ -1412,11 +1449,12 @@ def _find_codex_hook_handler() -> str | None:
             "scripts",
             "codex-hook-handler.py",
         ),
+        _find_bundled_script("codex-hook-handler.py") or "",
     ]
     for candidate in candidates:
         if os.path.isfile(candidate):
             return candidate
-    return _find_bundled_script("codex-hook-handler.py")
+    return None
 
 
 def _install_codex_hooks(project_dir: str) -> tuple[str, str]:
@@ -1439,20 +1477,50 @@ def _install_codex_hooks(project_dir: str) -> tuple[str, str]:
     events = ["SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"]
     for event in events:
         command = f"python3 {shlex.quote(hook_handler)} {event}"
+        new_hook = {"type": "command", "command": command}
         new_entry = {
             "matcher": ".*",
-            "hooks": [{"type": "command", "command": command}],
+            "arh_managed": True,
+            "hooks": [new_hook],
         }
         existing = hooks.get(event, [])
-        hooks[event] = [
-            entry
-            for entry in existing
-            if not any(
-                "codex-hook-handler.py" in h.get("command", "")
-                for h in entry.get("hooks", [])
-            )
-        ]
-        hooks[event].append(new_entry)
+        if not isinstance(existing, list):
+            existing = []
+        updated_existing = False
+        for entry in existing:
+            if not isinstance(entry, dict):
+                continue
+            hook_list = entry.get("hooks", [])
+            if not isinstance(hook_list, list):
+                continue
+            entry_is_managed = entry.get("arh_managed") is True
+            for index, existing_hook in enumerate(hook_list):
+                if not isinstance(existing_hook, dict):
+                    continue
+                command_text = str(existing_hook.get("command") or "")
+                managed_match = (
+                    entry_is_managed
+                    and (parsed := _parse_codex_hook_command(command_text)) is not None
+                    and parsed[1] == event
+                    and os.path.basename(parsed[0]) == "codex-hook-handler.py"
+                )
+                if managed_match or _is_arh_codex_hook_command(
+                    command_text,
+                    event=event,
+                    current_handler=hook_handler,
+                    allow_legacy=True,
+                    project_dir=project_dir,
+                ):
+                    hook_list[index] = dict(new_hook)
+                    entry["matcher"] = ".*"
+                    entry["arh_managed"] = True
+                    updated_existing = True
+                    break
+            if updated_existing:
+                break
+        if not updated_existing:
+            existing.append(new_entry)
+        hooks[event] = existing
 
     settings["hooks"] = hooks
     with open(hooks_path, "w") as f:
@@ -1558,7 +1626,372 @@ def _codex_hooks_feature_state(config_path: str) -> dict:
     return state
 
 
-def _repair_codex_setup(project_dir: str) -> dict:
+def _codex_home() -> str:
+    return os.path.abspath(
+        os.path.expanduser(os.environ.get("CODEX_HOME", "~/.codex"))
+    )
+
+
+def _codex_user_config_path() -> str:
+    return os.path.join(_codex_home(), "config.toml")
+
+
+def _load_toml_config(path: str) -> dict:
+    if not tomllib or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "rb") as f:
+            data = tomllib.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, tomllib.TOMLDecodeError):
+        return {}
+
+
+def _load_toml_document(path: str):
+    if not os.path.isfile(path):
+        return tomlkit.document()
+    try:
+        with open(path, "r") as f:
+            return tomlkit.parse(f.read())
+    except tomlkit.exceptions.TOMLKitError as e:
+        raise ValueError("Cannot update Codex config because config.toml is invalid TOML.") from e
+    except OSError as e:
+        raise OSError(_redact_cli_text(str(e))) from e
+
+
+def _write_toml_document(path: str, document) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path, "w") as f:
+            f.write(tomlkit.dumps(document))
+    except OSError as e:
+        raise OSError(_redact_cli_text(str(e))) from e
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _new_child_toml_table(parent):
+    return tomlkit.table()
+
+
+def _is_inline_toml_table(item) -> bool:
+    return item.__class__.__name__ == "InlineTable"
+
+
+def _regular_toml_table_from(item):
+    table = tomlkit.table()
+    for child_key, child_value in item.items():
+        table[child_key] = child_value
+    return table
+
+
+def _ensure_toml_nested_key(
+    path: str,
+    table_path: list[str],
+    key: str,
+    value: str | bool | int | float,
+) -> None:
+    document = _load_toml_document(path)
+    current = document
+    traversed: list[str] = []
+    for part in table_path:
+        traversed.append(part)
+        child = current.get(part)
+        if child is None:
+            child = _new_child_toml_table(current)
+            current[part] = child
+        elif not isinstance(child, dict):
+            location = ".".join(traversed)
+            raise ValueError(
+                f"Cannot update Codex config because `{location}` is not a TOML table."
+            )
+        elif _is_inline_toml_table(child):
+            child = _regular_toml_table_from(child)
+            current[part] = child
+        current = child
+    current[key] = value
+    _write_toml_document(path, document)
+
+
+def _codex_project_trust_keys(project_dir: str) -> list[str]:
+    keys = [
+        os.path.realpath(os.path.abspath(project_dir)),
+        os.path.abspath(project_dir),
+    ]
+    deduped: list[str] = []
+    for key in keys:
+        if key not in deduped:
+            deduped.append(key)
+    return deduped
+
+
+def _codex_project_trusted(project_dir: str, user_config: dict | None = None) -> bool:
+    config = user_config if user_config is not None else _load_toml_config(_codex_user_config_path())
+    projects = config.get("projects", {}) if isinstance(config, dict) else {}
+    if not isinstance(projects, dict):
+        return False
+    for key in _codex_project_trust_keys(project_dir):
+        project = projects.get(key)
+        if isinstance(project, dict) and project.get("trust_level") == "trusted":
+            return True
+    return False
+
+
+def _ensure_codex_project_trust(project_dir: str) -> None:
+    _ensure_toml_nested_key(
+        _codex_user_config_path(),
+        ["projects", _codex_project_trust_keys(project_dir)[0]],
+        "trust_level",
+        "trusted",
+    )
+
+
+def _codex_hook_key(source_path: str, event: str, group_index: int, handler_index: int) -> str:
+    return (
+        f"{source_path}:{CODEX_HOOK_EVENT_LABELS[event]}:"
+        f"{group_index}:{handler_index}"
+    )
+
+
+def _parse_codex_hook_command(command: str) -> tuple[str, str] | None:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return None
+    if len(parts) != 3:
+        return None
+    interpreter, handler, event = parts
+    if not os.path.basename(interpreter).startswith("python"):
+        return None
+    if event not in CODEX_REQUIRED_HOOK_EVENTS:
+        return None
+    return handler, event
+
+
+def _is_current_arh_codex_hook_handler(
+    handler: str,
+    current_handler: str | None = None,
+) -> bool:
+    if not current_handler:
+        return False
+    handler_abs = os.path.realpath(os.path.abspath(os.path.expanduser(handler)))
+    current_abs = os.path.realpath(os.path.abspath(os.path.expanduser(current_handler)))
+    return handler_abs == current_abs
+
+
+def _is_legacy_arh_codex_hook_handler(
+    handler: str,
+    project_dir: str | None = None,
+) -> bool:
+    handler_abs = os.path.realpath(os.path.abspath(os.path.expanduser(handler)))
+    if os.path.basename(handler_abs) != "codex-hook-handler.py":
+        return False
+    if project_dir:
+        try:
+            project_abs = os.path.realpath(os.path.abspath(project_dir))
+            if os.path.commonpath([project_abs, handler_abs]) == project_abs:
+                return False
+        except ValueError:
+            pass
+    normalized = handler_abs.replace("\\", "/")
+    return (
+        normalized.endswith("/arh_client/_bundled/codex-hook-handler.py")
+    )
+
+
+def _is_arh_codex_hook_command(
+    command: str,
+    event: str | None = None,
+    current_handler: str | None = None,
+    allow_legacy: bool = False,
+    project_dir: str | None = None,
+) -> bool:
+    parsed = _parse_codex_hook_command(command)
+    if not parsed:
+        return False
+    handler, parsed_event = parsed
+    if event and parsed_event != event:
+        return False
+    return _is_current_arh_codex_hook_handler(
+        handler,
+        current_handler,
+    ) or (
+        allow_legacy
+        and _is_legacy_arh_codex_hook_handler(handler, project_dir=project_dir)
+    )
+
+
+def _codex_normalized_hook_hash(
+    event: str,
+    matcher: str | None,
+    command: str,
+    hook_config: dict,
+) -> str:
+    timeout = hook_config.get("timeout", hook_config.get("timeout_sec", 600))
+    try:
+        timeout = max(1, int(timeout or 600))
+    except (TypeError, ValueError):
+        timeout = 600
+    handler = {
+        "async": bool(hook_config.get("async", False)),
+        "command": command,
+        "timeout": timeout,
+        "type": "command",
+    }
+    status_message = hook_config.get("statusMessage", hook_config.get("status_message"))
+    if status_message is not None:
+        handler["statusMessage"] = status_message
+    identity = {
+        "event_name": CODEX_HOOK_EVENT_LABELS[event],
+        "hooks": [handler],
+    }
+    if matcher is not None:
+        identity["matcher"] = matcher
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
+def _codex_arh_hook_trust_entries(project_dir: str) -> list[dict]:
+    hooks_path = os.path.join(project_dir, ".codex", "hooks.json")
+    if not os.path.isfile(hooks_path):
+        return []
+    try:
+        hooks_json = json.loads(open(hooks_path).read())
+    except (OSError, json.JSONDecodeError):
+        return []
+    hooks = hooks_json.get("hooks", {}) if isinstance(hooks_json, dict) else {}
+    if not isinstance(hooks, dict):
+        return []
+
+    current_handler = _find_codex_hook_handler()
+    source_path = os.path.realpath(hooks_path)
+    entries: list[dict] = []
+    for event in CODEX_REQUIRED_HOOK_EVENTS:
+        groups = hooks.get(event, [])
+        if not isinstance(groups, list):
+            continue
+        for group_index, group in enumerate(groups):
+            if not isinstance(group, dict):
+                continue
+            matcher = group.get("matcher") if event in CODEX_HOOK_EVENTS_WITH_MATCHERS else None
+            if matcher is not None:
+                matcher = str(matcher)
+            hook_list = group.get("hooks", [])
+            if not isinstance(hook_list, list):
+                continue
+            for handler_index, hook_config in enumerate(hook_list):
+                if not isinstance(hook_config, dict):
+                    continue
+                command = str(hook_config.get("command") or "")
+                if (
+                    hook_config.get("type") == "command"
+                    and _is_arh_codex_hook_command(
+                        command,
+                        event=event,
+                        current_handler=current_handler,
+                    )
+                ):
+                    entries.append(
+                        {
+                            "event": event,
+                            "key": _codex_hook_key(
+                                source_path, event, group_index, handler_index
+                            ),
+                            "trusted_hash": _codex_normalized_hook_hash(
+                                event, matcher, command, hook_config
+                            ),
+                        }
+                    )
+    return entries
+
+
+def _codex_hook_trust_report(project_dir: str) -> dict:
+    user_config = _load_toml_config(_codex_user_config_path())
+    state = {}
+    hooks_section = user_config.get("hooks", {}) if isinstance(user_config, dict) else {}
+    if isinstance(hooks_section, dict) and isinstance(hooks_section.get("state"), dict):
+        state = hooks_section["state"]
+
+    entries = _codex_arh_hook_trust_entries(project_dir)
+    missing: list[str] = []
+    modified: list[str] = []
+    disabled: list[str] = []
+    trusted: list[str] = []
+    for entry in entries:
+        hook_state = state.get(entry["key"], {}) if isinstance(state, dict) else {}
+        if not isinstance(hook_state, dict):
+            hook_state = {}
+        if hook_state.get("enabled") is False:
+            disabled.append(entry["event"])
+        if hook_state.get("trusted_hash") == entry["trusted_hash"]:
+            trusted.append(entry["event"])
+        elif hook_state.get("trusted_hash"):
+            modified.append(entry["event"])
+        else:
+            missing.append(entry["event"])
+
+    trusted_set = set(trusted)
+    modified_set = set(modified)
+    disabled_set = set(disabled)
+    missing_events = [
+        event
+        for event in CODEX_REQUIRED_HOOK_EVENTS
+        if event not in trusted_set and event not in modified_set
+    ]
+    project_trusted = _codex_project_trusted(project_dir, user_config)
+    return {
+        "project_trusted": project_trusted,
+        "arh_hook_count": len(entries),
+        "trusted_events": sorted(trusted_set),
+        "missing_trusted_events": missing_events,
+        "modified_events": sorted(modified_set),
+        "disabled_events": sorted(disabled_set),
+        "all_trusted": (
+            project_trusted
+            and bool(entries)
+            and not missing_events
+            and not modified_set
+            and not disabled_set
+        ),
+    }
+
+
+def _ensure_codex_hook_trust(project_dir: str) -> dict:
+    _ensure_codex_project_trust(project_dir)
+    config_path = _codex_user_config_path()
+    entries = _codex_arh_hook_trust_entries(project_dir)
+    for entry in entries:
+        _ensure_toml_nested_key(
+            config_path,
+            ["hooks", "state", entry["key"]],
+            "trusted_hash",
+            entry["trusted_hash"],
+        )
+    return _codex_hook_trust_report(project_dir)
+
+
+def _codex_installed_status_from_trust(trust: dict) -> str:
+    if trust.get("all_trusted"):
+        return "installed_unverified"
+    return "installed_untrusted"
+
+
+def _codex_verification_hint(trust: dict) -> str:
+    if trust.get("all_trusted"):
+        return (
+            "Start a new Codex session in this repository. Run `arh doctor codex` "
+            "if no user/tool/session logs appear after the first turn."
+        )
+    return (
+        "Codex hook files are installed, but Codex will not execute untrusted "
+        "project-local hooks. Run `arh doctor codex --fix "
+        "--confirm-codex-hook-trust` after reviewing the ARH hook command."
+    )
+
+
+def _repair_codex_setup(project_dir: str, confirm_hook_trust: bool = False) -> dict:
     """Rewrite Codex hook wiring for an existing ARH project."""
     settings_path = os.path.join(project_dir, ".arh", "settings.json")
     settings = {}
@@ -1584,9 +2017,15 @@ def _repair_codex_setup(project_dir: str) -> dict:
             previous_status = {}
 
     hook_path, config_path = _install_codex_hooks(project_dir)
+    trust = (
+        _ensure_codex_hook_trust(project_dir)
+        if confirm_hook_trust
+        else _codex_hook_trust_report(project_dir)
+    )
+    installed_status = _codex_installed_status_from_trust(trust)
     status = _runtime_adapter_status(
         "codex",
-        "installed_unverified",
+        installed_status,
         requested_runtime=str(previous_status.get("requested_runtime") or "codex"),
         resolved_runtime="codex",
         files={
@@ -1598,13 +2037,12 @@ def _repair_codex_setup(project_dir: str) -> dict:
     )
     status["native_hooks_installed"] = True
     status["native_hooks_verified"] = False
+    status["native_hooks_trusted"] = bool(trust.get("all_trusted"))
     status["native_hooks_observed_events"] = []
     status["native_hooks_missing_events"] = list(CODEX_REQUIRED_HOOK_EVENTS)
-    status["verification_hint"] = (
-        "Start a new trusted Codex session in this repository. If Codex asks "
-        "to review project hooks, approve the ARH hook. Run `arh doctor codex` "
-        "again if no user/tool/session logs appear after the first turn."
-    )
+    status["codex_project_trusted"] = bool(trust.get("project_trusted"))
+    status["codex_missing_trusted_hooks"] = trust.get("missing_trusted_events", [])
+    status["verification_hint"] = _codex_verification_hint(trust)
     written_status_path = _write_adapter_status(project_dir, status)
 
     return {
@@ -1613,7 +2051,8 @@ def _repair_codex_setup(project_dir: str) -> dict:
         "hooks": os.path.relpath(hook_path, project_dir),
         "config": os.path.relpath(config_path, project_dir),
         "adapter_status": os.path.relpath(written_status_path, project_dir),
-        "status": "installed_unverified",
+        "status": installed_status,
+        "hook_trust": trust,
     }
 
 
@@ -1623,7 +2062,10 @@ def cmd_doctor_codex(args):
     repair = None
     if getattr(args, "fix", False):
         try:
-            repair = _repair_codex_setup(project_dir)
+            repair = _repair_codex_setup(
+                project_dir,
+                confirm_hook_trust=getattr(args, "confirm_codex_hook_trust", False),
+            )
         except Exception as e:
             repair = {"applied": False, "error": _redact_cli_text(str(e))}
 
@@ -1651,6 +2093,7 @@ def cmd_doctor_codex(args):
             version = "error"
 
     feature_state = _codex_hooks_feature_state(config_path)
+    hook_trust = _codex_hook_trust_report(project_dir)
     hooks_events: list[str] = []
     hooks_has_arh = False
     hooks_missing_events = list(CODEX_REQUIRED_HOOK_EVENTS)
@@ -1661,9 +2104,29 @@ def cmd_doctor_codex(args):
             if isinstance(hooks, dict):
                 hooks_events = sorted(hooks)
                 hooks_missing_events = []
+                current_handler = _find_codex_hook_handler()
                 for event in CODEX_REQUIRED_HOOK_EVENTS:
                     event_entries = hooks.get(event, [])
-                    event_has_arh = "codex-hook-handler.py" in json.dumps(event_entries)
+                    event_has_arh = False
+                    if isinstance(event_entries, list):
+                        for entry in event_entries:
+                            if not isinstance(entry, dict):
+                                continue
+                            hook_list = entry.get("hooks", [])
+                            if not isinstance(hook_list, list):
+                                continue
+                            if any(
+                                isinstance(hook_config, dict)
+                                and hook_config.get("type") == "command"
+                                and _is_arh_codex_hook_command(
+                                    str(hook_config.get("command") or ""),
+                                    event=event,
+                                    current_handler=current_handler,
+                                )
+                                for hook_config in hook_list
+                            ):
+                                event_has_arh = True
+                                break
                     if not event_has_arh:
                         hooks_missing_events.append(event)
                 hooks_has_arh = not hooks_missing_events
@@ -1687,8 +2150,11 @@ def cmd_doctor_codex(args):
                 "degraded_reason": _redact_cli_text(str(raw_status.get("degraded_reason", ""))),
                 "native_hooks_installed": raw_status.get("native_hooks_installed"),
                 "native_hooks_verified": raw_status.get("native_hooks_verified"),
+                "native_hooks_trusted": raw_status.get("native_hooks_trusted"),
                 "native_hooks_observed_events": raw_status.get("native_hooks_observed_events", []),
                 "native_hooks_missing_events": raw_status.get("native_hooks_missing_events", []),
+                "codex_project_trusted": raw_status.get("codex_project_trusted"),
+                "codex_missing_trusted_hooks": raw_status.get("codex_missing_trusted_hooks", []),
                 "last_hook_event_name": raw_status.get("last_hook_event_name"),
                 "last_hook_event_at": raw_status.get("last_hook_event_at"),
             }
@@ -1709,10 +2175,34 @@ def cmd_doctor_codex(args):
         )
     if not settings.get("project_id"):
         issues.append(".arh/settings.json does not contain an ARH project_id.")
+    if hooks_has_arh and not hook_trust.get("project_trusted"):
+        issues.append(
+            "Codex project is not trusted in ~/.codex/config.toml; project-local hooks are disabled."
+        )
+    if hooks_has_arh and not hook_trust.get("all_trusted"):
+        missing = hook_trust.get("missing_trusted_events") or []
+        modified = hook_trust.get("modified_events") or []
+        disabled = hook_trust.get("disabled_events") or []
+        details = []
+        if missing:
+            details.append("missing trusted_hash for " + ", ".join(missing))
+        if modified:
+            details.append("modified trusted_hash for " + ", ".join(modified))
+        if disabled:
+            details.append("disabled hooks for " + ", ".join(disabled))
+        issues.append(
+            "Codex ARH hooks are installed but not trusted. "
+            + "; ".join(details)
+            + ". Run `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook command."
+        )
     if adapter_status.get("status") == "installed_unverified":
         issues.append(
-            "Codex hooks are installed but not verified yet. Start a trusted Codex "
-            "session in this repository and approve hook review if Codex asks."
+            "Codex hooks are trusted but not verified yet. Start a new Codex "
+            "session in this repository and run one turn."
+        )
+    if adapter_status.get("status") == "installed_untrusted":
+        issues.append(
+            "Codex hook files are installed, but project-local hook trust is incomplete."
         )
     if adapter_status.get("status") == "installed_partial":
         missing = adapter_status.get("native_hooks_missing_events") or []
@@ -1725,7 +2215,7 @@ def cmd_doctor_codex(args):
 
     report = {
         "runtime": "codex",
-        "project_dir": project_dir,
+        "project_dir": ".",
         "codex_version": version,
         "features": feature_state,
         "hooks_file": {
@@ -1734,6 +2224,7 @@ def cmd_doctor_codex(args):
             "has_arh_handler": hooks_has_arh,
             "missing_arh_handler_events": hooks_missing_events,
         },
+        "hook_trust": hook_trust,
         "project_context": {
             "settings_exists": os.path.isfile(settings_path),
             "has_project_id": bool(settings.get("project_id")),
@@ -2767,6 +3258,14 @@ def main():
         help="Codex Stop behavior: create a real git commit, or only log an ARH handoff event",
     )
     p_track.add_argument(
+        "--confirm-codex-hook-trust",
+        action="store_true",
+        help=(
+            "Confirm ARH may mark its generated Codex project-local hooks as "
+            "trusted in ~/.codex/config.toml."
+        ),
+    )
+    p_track.add_argument(
         "--project-id",
         default="",
         help="Reuse an existing ARH project ID instead of creating one",
@@ -2826,6 +3325,14 @@ def main():
         help="Codex Stop behavior: create a real git commit, or only log an ARH handoff event",
     )
     p_handoff.add_argument(
+        "--confirm-codex-hook-trust",
+        action="store_true",
+        help=(
+            "Confirm ARH may mark its generated Codex project-local hooks as "
+            "trusted in ~/.codex/config.toml."
+        ),
+    )
+    p_handoff.add_argument(
         "--project-id",
         default="",
         help="Reuse an existing ARH project ID instead of creating one",
@@ -2865,6 +3372,14 @@ def main():
         "--fix",
         action="store_true",
         help="Repair Codex ARH hook wiring for an existing project without creating a new project",
+    )
+    p_doctor_codex.add_argument(
+        "--confirm-codex-hook-trust",
+        action="store_true",
+        help=(
+            "Confirm ARH may mark its generated Codex project-local hooks as "
+            "trusted in ~/.codex/config.toml during --fix."
+        ),
     )
     p_doctor_codex.set_defaults(func=cmd_doctor_codex)
 
