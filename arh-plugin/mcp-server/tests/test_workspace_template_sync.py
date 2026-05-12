@@ -58,3 +58,57 @@ def test_workspace_markdown_matches_skill_heredoc() -> None:
             pytest.fail(
                 f"WORKFLOW_RULES_MARKDOWN has {len(a_lines)} lines but SKILL.md heredoc has {len(b_lines)} lines."
             )
+
+
+def test_workspace_markdown_does_not_require_global_arh_cli() -> None:
+    from arh_client._workspace import AGENTS_MD_BLOCK, WORKFLOW_RULES_MARKDOWN
+
+    combined = WORKFLOW_RULES_MARKDOWN + "\n" + AGENTS_MD_BLOCK
+    assert "uvx --refresh --from" in combined
+    assert "Do not run handoff again during normal research" in combined
+
+    removed_phrases = [
+        'Start from the single public entry point: `arh handoff "Project title"`',
+        'CLI fallback: run `arh checkpoint "..."` and `arh snapshot create ...`',
+        'call `checkpoint(summary=...)` or `arh checkpoint "..."`',
+        "verify with `arh doctor codex`",
+    ]
+    for phrase in removed_phrases:
+        assert phrase not in combined
+
+
+def test_initialize_research_workspace_refreshes_managed_docs(tmp_path: Path) -> None:
+    from arh_client._workspace import (
+        AGENTS_MD_BLOCK,
+        WORKFLOW_RULES_MARKDOWN,
+        initialize_research_workspace,
+    )
+
+    arh_dir = tmp_path / ".arh"
+    arh_dir.mkdir()
+    arh_md = arh_dir / "ARH.md"
+    arh_md.write_text(
+        "# Research Tracking Workflow (ARH)\n\n"
+        'Start from the single public entry point: `arh handoff "Project title"`.\n',
+        encoding="utf-8",
+    )
+    agents_md = tmp_path / "AGENTS.md"
+    agents_md.write_text(
+        "# Existing instructions\n\n"
+        "## AI Researcher Hub\n"
+        '- Narrate meaningful progress with `checkpoint(summary=...)` or `arh checkpoint "..."`.\n\n'
+        "## Keep Me\n"
+        "This section should survive.\n",
+        encoding="utf-8",
+    )
+
+    actions = initialize_research_workspace(str(tmp_path))
+
+    assert actions["arh_md"] is True
+    assert actions["agents_md"] is True
+    assert arh_md.read_text(encoding="utf-8") == WORKFLOW_RULES_MARKDOWN
+
+    updated_agents = agents_md.read_text(encoding="utf-8")
+    assert AGENTS_MD_BLOCK in updated_agents
+    assert "## Keep Me\nThis section should survive." in updated_agents
+    assert 'checkpoint(summary=...)` or `arh checkpoint "..."`' not in updated_agents

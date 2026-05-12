@@ -163,15 +163,22 @@ Create `.arh/ARH.md` with the following content:
 MUST follow this loop while doing research locally: think → act → `checkpoint` → repeat.
 
 ## Interface selection
-Start from the single public entry point: `arh handoff "Project title"`.
+This workspace was created from the single public setup entry point,
+`arh handoff "Project title"`. Do not run handoff again during normal research.
 It installs the best supported adapter for the runtime. Claude Code and Codex
 get native hooks when available; unknown agents get this shared workspace
 contract plus MCP/CLI/HTTP routes.
 
+The public setup path normally runs ARH through `uvx --refresh`; it does not
+require a global `arh` executable on PATH. If an instruction below says to use
+the ARH CLI and `arh` is not available, use this refreshed CLI form instead:
+
+    uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" arh <subcommand> ...
+
 Use the highest-quality route available after handoff:
 1. Native adapter already installed by handoff: rely on the runtime hooks and still narrate meaningful milestones with `checkpoint`.
 2. MCP tools: call `checkpoint`, `create_snapshot`, `log_research_step`, and related ARH tools directly.
-3. CLI fallback: run `arh checkpoint "..."` and `arh snapshot create ...`.
+3. CLI fallback: run the refreshed CLI form above with `checkpoint "..."` or `snapshot create ...`, or the short `arh ...` form only when it is actually installed.
 4. HTTP fallback: send structured events to `/v1/hooks/agent-event`.
 
 Do not silently downgrade. If `.arh/adapter-status.json` says the native adapter
@@ -183,15 +190,16 @@ setup or repair, run `/new` in Codex before research so a fresh thread loads the
 repo-local hooks. Fully reopening Codex in this repository is also OK. If
 Codex reports `installed_untrusted`, the repo-local hook files exist but Codex
 will not execute them until project/hook trust is recorded in `~/.codex/config.toml`;
-run `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook
-command. Run `arh doctor codex` if timeline events do not appear after the first
-fresh-thread Codex research turn.
+run the refreshed CLI form for `arh doctor codex --fix
+--confirm-codex-hook-trust` after reviewing the hook command. Run the refreshed
+CLI form for `arh doctor codex` if timeline events do not appear after the
+first fresh-thread Codex research turn.
 
 ## Generic agent contract
 If you are not Claude Code or Codex, you can still produce a useful ARH timeline:
 - At session start, read `.arh/settings.json` and use the `project_id` there.
 - Prefer MCP tools whenever your client supports MCP; they preserve structure better than plain logs.
-- After each meaningful step, call `checkpoint(summary=...)` or `arh checkpoint "..."`.
+- After each meaningful step, call `checkpoint(summary=...)`; if no MCP checkpoint tool is available, use the refreshed ARH CLI fallback for `arh checkpoint "..."`.
 - For every substantial tool/action your runner can observe, send a `tool_use` event to `/v1/hooks/agent-event`.
 - At the end, send `task_completed` or `session_stop` if your runner can make HTTP calls.
 - If you cannot emit events, write a concise final checkpoint that lists what changed and what remains uncertain.
@@ -264,10 +272,10 @@ peer-feed inbox. You don't have to push it to them; the platform routes.
 - `node_modules/`, `__pycache__/`, `.venv/`
 
 ## When you are unsure
-1. If no `project_id` is set, call `/arh:init-research` once to set up.
+1. If no `project_id` is set, run the website setup brief or the refreshed ARH CLI handoff command once to set up.
 2. If `link_git_repo` was not run, register artifacts will fail — fix link first.
 3. If a nudge from the system says "uncommitted changes", call `checkpoint` immediately.
-4. If `.arh/adapter-status.json` says `degraded`, keep working but use MCP/CLI checkpoints more frequently. If it says `installed_untrusted`, run `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook command. If it says `installed_unverified`, run `/new` in Codex before research, then run one fresh-thread turn and verify with `arh doctor codex`.
+4. If `.arh/adapter-status.json` says `degraded`, keep working but use MCP/CLI checkpoints more frequently. If it says `installed_untrusted`, run the refreshed ARH CLI form for `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook command. If it says `installed_unverified`, run `/new` in Codex before research, then run one fresh-thread turn and verify with the refreshed ARH CLI form for `arh doctor codex`.
 ```
 
 ### 5.5.3: Add reference in CLAUDE.md
@@ -298,7 +306,7 @@ This repository is tracked by AI Researcher Hub. Before acting on research tasks
 
 - Use the highest-fidelity ARH interface available: native runtime hooks first, MCP tools second, CLI/HTTP fallback last.
 - Check `.arh/adapter-status.json` if capture quality matters; if native hooks are degraded, or Codex hooks are still `installed_untrusted` / `installed_unverified`, use MCP/CLI checkpoints deliberately until trust and verification succeed.
-- Narrate meaningful progress with `checkpoint(summary=...)` or `arh checkpoint "..."`; do not replace checkpoints with bare `git commit`.
+- Narrate meaningful progress with `checkpoint(summary=...)`; if no MCP checkpoint tool is available, use the refreshed ARH CLI fallback for `arh checkpoint "..."`. Do not replace checkpoints with bare `git commit`.
 - Draft snapshots after meaningful findings. Publishing requires explicit human approval.
 ```
 

@@ -22,6 +22,11 @@ from dotenv import load_dotenv
 
 
 DEFAULT_API_URL = "https://api.airesearcherhub.com"
+PUBLIC_ARH_CLIENT_SOURCE = (
+    "git+https://github.com/unktok/arh-plugin.git"
+    "#subdirectory=arh-plugin/mcp-server/client-src"
+)
+PUBLIC_ARH_CLI_PREFIX = f'uvx --refresh --from "{PUBLIC_ARH_CLIENT_SOURCE}" arh'
 CODEX_REQUIRED_HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop")
 CODEX_HOOK_EVENT_LABELS = {
     "SessionStart": "session_start",
@@ -1985,18 +1990,21 @@ def _codex_verification_hint(trust: dict) -> str:
         return (
             "Run `/new` in Codex before research, or fully reopen Codex in "
             "this repository. "
-            "Run `arh doctor codex` if no user/tool/session logs appear after "
-            "the first fresh-thread research turn."
+            f"Run `{PUBLIC_ARH_CLI_PREFIX} doctor codex` if no "
+            "user/tool/session logs appear after the first fresh-thread "
+            "research turn."
         )
     return (
         "Codex hook files are installed, but Codex will not execute untrusted "
-        "project-local hooks. Run `arh doctor codex --fix "
+        f"project-local hooks. Run `{PUBLIC_ARH_CLI_PREFIX} doctor codex --fix "
         "--confirm-codex-hook-trust` after reviewing the ARH hook command."
     )
 
 
 def _repair_codex_setup(project_dir: str, confirm_hook_trust: bool = False) -> dict:
     """Rewrite Codex hook wiring for an existing ARH project."""
+    from arh_client._workspace import initialize_research_workspace
+
     settings_path = os.path.join(project_dir, ".arh", "settings.json")
     settings = {}
     if os.path.isfile(settings_path):
@@ -2009,7 +2017,10 @@ def _repair_codex_setup(project_dir: str, confirm_hook_trust: bool = False) -> d
     if not project_id:
         return {
             "applied": False,
-            "error": ".arh/settings.json does not contain an ARH project_id; run `arh handoff` first.",
+            "error": (
+                ".arh/settings.json does not contain an ARH project_id; run the "
+                f"setup brief or `{PUBLIC_ARH_CLI_PREFIX} handoff \"Project title\"` first."
+            ),
         }
 
     status_path = os.path.join(project_dir, ".arh", "adapter-status.json")
@@ -2019,6 +2030,12 @@ def _repair_codex_setup(project_dir: str, confirm_hook_trust: bool = False) -> d
             previous_status = json.loads(open(status_path).read())
         except (OSError, json.JSONDecodeError):
             previous_status = {}
+
+    workspace_actions: dict = {}
+    try:
+        workspace_actions = initialize_research_workspace(project_dir)
+    except Exception as e:
+        workspace_actions = {"error": _redact_cli_text(str(e))}
 
     hook_path, config_path = _install_codex_hooks(project_dir)
     trust = (
@@ -2057,6 +2074,7 @@ def _repair_codex_setup(project_dir: str, confirm_hook_trust: bool = False) -> d
         "adapter_status": os.path.relpath(written_status_path, project_dir),
         "status": installed_status,
         "hook_trust": trust,
+        "workspace": workspace_actions,
     }
 
 
@@ -2199,7 +2217,7 @@ def cmd_doctor_codex(args):
         issues.append(
             "Codex ARH hooks are installed but not trusted. "
             + "; ".join(details)
-            + ". Run `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook command."
+            + f". Run `{PUBLIC_ARH_CLI_PREFIX} doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook command."
         )
     if adapter_status.get("status") == "installed_unverified":
         issues.append(
@@ -2629,7 +2647,10 @@ def _scan_staged_secrets_cli(project_dir: str) -> dict:
         return {
             "blocked": True,
             "error": "gitleaks is required before ARH checkpoint can commit and push.",
-            "fix": "Install gitleaks, then rerun `arh checkpoint`.",
+            "fix": (
+                "Install gitleaks, then rerun the checkpoint command. If `arh` "
+                f"is not on PATH, use `{PUBLIC_ARH_CLI_PREFIX} checkpoint ...`."
+            ),
         }
     rc, out, err = _run_git(
         project_dir,
@@ -2680,7 +2701,11 @@ def _checkpoint_git_commit(project_dir: str, message: str, push: bool = True) ->
         return {
             "error": "Not inside a git repository.",
             "reason": "no_repo",
-            "fix": "Run `arh handoff` in the repository root or initialize git first.",
+            "fix": (
+                "Run the setup brief in the repository root, use "
+                f"`{PUBLIC_ARH_CLI_PREFIX} handoff \"Project title\"`, or "
+                "initialize git first."
+            ),
         }
 
     rc, out, err = _run_git(project_dir, ["status", "--porcelain"], timeout=20)
@@ -2736,8 +2761,8 @@ def cmd_checkpoint(args):
     project_id = _resolve_project_id(args.project_id or "", project_dir)
     if not project_id:
         print(
-            "Error: no ARH project_id found. Run `arh handoff \"Project title\"` first "
-            "or pass --project-id.",
+            "Error: no ARH project_id found. Run the setup brief first, use "
+            f"`{PUBLIC_ARH_CLI_PREFIX} handoff \"Project title\"`, or pass --project-id.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -2843,8 +2868,8 @@ def cmd_snapshot_create(args):
     project_id = _resolve_project_id(args.project_id or "")
     if not project_id:
         print(
-            "Error: no ARH project_id found. Run `arh handoff \"Project title\"` first "
-            "or pass --project-id.",
+            "Error: no ARH project_id found. Run the setup brief first, use "
+            f"`{PUBLIC_ARH_CLI_PREFIX} handoff \"Project title\"`, or pass --project-id.",
             file=sys.stderr,
         )
         sys.exit(1)

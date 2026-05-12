@@ -25,15 +25,22 @@ WORKFLOW_RULES_MARKDOWN = """# Research Tracking Workflow (ARH)
 MUST follow this loop while doing research locally: think → act → `checkpoint` → repeat.
 
 ## Interface selection
-Start from the single public entry point: `arh handoff "Project title"`.
+This workspace was created from the single public setup entry point,
+`arh handoff "Project title"`. Do not run handoff again during normal research.
 It installs the best supported adapter for the runtime. Claude Code and Codex
 get native hooks when available; unknown agents get this shared workspace
 contract plus MCP/CLI/HTTP routes.
 
+The public setup path normally runs ARH through `uvx --refresh`; it does not
+require a global `arh` executable on PATH. If an instruction below says to use
+the ARH CLI and `arh` is not available, use this refreshed CLI form instead:
+
+    uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" arh <subcommand> ...
+
 Use the highest-quality route available after handoff:
 1. Native adapter already installed by handoff: rely on the runtime hooks and still narrate meaningful milestones with `checkpoint`.
 2. MCP tools: call `checkpoint`, `create_snapshot`, `log_research_step`, and related ARH tools directly.
-3. CLI fallback: run `arh checkpoint "..."` and `arh snapshot create ...`.
+3. CLI fallback: run the refreshed CLI form above with `checkpoint "..."` or `snapshot create ...`, or the short `arh ...` form only when it is actually installed.
 4. HTTP fallback: send structured events to `/v1/hooks/agent-event`.
 
 Do not silently downgrade. If `.arh/adapter-status.json` says the native adapter
@@ -45,15 +52,16 @@ setup or repair, run `/new` in Codex before research so a fresh thread loads the
 repo-local hooks. Fully reopening Codex in this repository is also OK. If
 Codex reports `installed_untrusted`, the repo-local hook files exist but Codex
 will not execute them until project/hook trust is recorded in `~/.codex/config.toml`;
-run `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook
-command. Run `arh doctor codex` if timeline events do not appear after the first
-fresh-thread Codex research turn.
+run the refreshed CLI form for `arh doctor codex --fix
+--confirm-codex-hook-trust` after reviewing the hook command. Run the refreshed
+CLI form for `arh doctor codex` if timeline events do not appear after the
+first fresh-thread Codex research turn.
 
 ## Generic agent contract
 If you are not Claude Code or Codex, you can still produce a useful ARH timeline:
 - At session start, read `.arh/settings.json` and use the `project_id` there.
 - Prefer MCP tools whenever your client supports MCP; they preserve structure better than plain logs.
-- After each meaningful step, call `checkpoint(summary=...)` or `arh checkpoint "..."`.
+- After each meaningful step, call `checkpoint(summary=...)`; if no MCP checkpoint tool is available, use the refreshed ARH CLI fallback for `arh checkpoint "..."`.
 - For every substantial tool/action your runner can observe, send a `tool_use` event to `/v1/hooks/agent-event`.
 - At the end, send `task_completed` or `session_stop` if your runner can make HTTP calls.
 - If you cannot emit events, write a concise final checkpoint that lists what changed and what remains uncertain.
@@ -126,10 +134,10 @@ peer-feed inbox. You don't have to push it to them; the platform routes.
 - `node_modules/`, `__pycache__/`, `.venv/`
 
 ## When you are unsure
-1. If no `project_id` is set, call `/arh:init-research` once to set up.
+1. If no `project_id` is set, run the website setup brief or the refreshed ARH CLI handoff command once to set up.
 2. If `link_git_repo` was not run, register artifacts will fail — fix link first.
 3. If a nudge from the system says "uncommitted changes", call `checkpoint` immediately.
-4. If `.arh/adapter-status.json` says `degraded`, keep working but use MCP/CLI checkpoints more frequently. If it says `installed_untrusted`, run `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook command. If it says `installed_unverified`, run `/new` in Codex before research, then run one fresh-thread turn and verify with `arh doctor codex`.
+4. If `.arh/adapter-status.json` says `degraded`, keep working but use MCP/CLI checkpoints more frequently. If it says `installed_untrusted`, run the refreshed ARH CLI form for `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook command. If it says `installed_unverified`, run `/new` in Codex before research, then run one fresh-thread turn and verify with the refreshed ARH CLI form for `arh doctor codex`.
 """
 
 
@@ -147,7 +155,7 @@ This repository is tracked by AI Researcher Hub. Before acting on research tasks
 
 - Use the highest-fidelity ARH interface available: native runtime hooks first, MCP tools second, CLI/HTTP fallback last.
 - Check `.arh/adapter-status.json` if capture quality matters; if native hooks are degraded, or Codex hooks are still `installed_untrusted` / `installed_unverified`, use MCP/CLI checkpoints deliberately until trust and verification succeed.
-- Narrate meaningful progress with `checkpoint(summary=...)` or `arh checkpoint "..."`; do not replace checkpoints with bare `git commit`.
+- Narrate meaningful progress with `checkpoint(summary=...)`; if no MCP checkpoint tool is available, use the refreshed ARH CLI fallback for `arh checkpoint "..."`. Do not replace checkpoints with bare `git commit`.
 - Draft snapshots after meaningful findings. Publishing requires explicit human approval.
 """
 
@@ -177,12 +185,68 @@ def _ensure_dir_with_keep(path: str) -> None:
             f.write("")
 
 
-def _write_if_absent(path: str, content: str) -> bool:
+def _write_managed_arh_md(path: str, content: str) -> bool:
+    """Create or refresh the managed ARH workflow guide.
+
+    `.arh/ARH.md` is ARH-owned setup output. Rewriting it on handoff/repair
+    keeps old projects from retaining stale operational instructions, while
+    avoiding edits to unrelated custom files with a different heading.
+    """
+    existing = ""
     if os.path.exists(path):
+        try:
+            with open(path) as f:
+                existing = f.read()
+        except OSError:
+            existing = ""
+
+    if existing == content:
         return False
+    if existing and not existing.startswith("# Research Tracking Workflow (ARH)"):
+        return False
+
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
         f.write(content)
+    return True
+
+
+def _upsert_markdown_section(project_dir: str, filename: str, block: str) -> bool:
+    """Append or replace the managed `## AI Researcher Hub` section."""
+    path = os.path.join(project_dir, filename)
+    heading = "## AI Researcher Hub"
+    existing = ""
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                existing = f.read()
+        except OSError:
+            existing = ""
+
+    if heading not in existing:
+        separator = "\n\n" if existing.strip() else ""
+        updated = existing.rstrip() + separator + block
+    else:
+        start = existing.find(heading)
+        next_heading = existing.find("\n## ", start + len(heading))
+        if next_heading == -1:
+            prefix = existing[:start].rstrip()
+            updated = prefix + ("\n\n" if prefix else "") + block
+        else:
+            suffix = existing[next_heading:].lstrip("\n")
+            updated = (
+                existing[:start].rstrip()
+                + ("\n\n" if existing[:start].strip() else "")
+                + block.rstrip()
+                + "\n\n"
+                + suffix
+            )
+
+    updated = updated.rstrip() + "\n"
+    if updated == existing:
+        return False
+    with open(path, "w") as f:
+        f.write(updated)
     return True
 
 
@@ -191,22 +255,7 @@ def _append_claude_md_block(project_dir: str) -> bool:
 
     Returns True if the file was modified.
     """
-    path = os.path.join(project_dir, "CLAUDE.md")
-    existing = ""
-    if os.path.exists(path):
-        try:
-            with open(path) as f:
-                existing = f.read()
-        except OSError:
-            existing = ""
-    if "## AI Researcher Hub" in existing:
-        return False
-    separator = "\n\n" if existing.strip() else ""
-    with open(path, "w") as f:
-        f.write(existing.rstrip() + separator + CLAUDE_MD_BLOCK)
-        if not CLAUDE_MD_BLOCK.endswith("\n"):
-            f.write("\n")
-    return True
+    return _upsert_markdown_section(project_dir, "CLAUDE.md", CLAUDE_MD_BLOCK)
 
 
 def _append_agents_md_block(project_dir: str) -> bool:
@@ -216,22 +265,7 @@ def _append_agents_md_block(project_dir: str) -> bool:
     agents, so it gives generic agents the same pointer Claude Code gets from
     CLAUDE.md without replacing Claude-specific behavior.
     """
-    path = os.path.join(project_dir, "AGENTS.md")
-    existing = ""
-    if os.path.exists(path):
-        try:
-            with open(path) as f:
-                existing = f.read()
-        except OSError:
-            existing = ""
-    if "## AI Researcher Hub" in existing:
-        return False
-    separator = "\n\n" if existing.strip() else ""
-    with open(path, "w") as f:
-        f.write(existing.rstrip() + separator + AGENTS_MD_BLOCK)
-        if not AGENTS_MD_BLOCK.endswith("\n"):
-            f.write("\n")
-    return True
+    return _upsert_markdown_section(project_dir, "AGENTS.md", AGENTS_MD_BLOCK)
 
 
 def _augment_gitignore(
@@ -294,7 +328,7 @@ def initialize_research_workspace(project_dir: str) -> dict:
     arh_dir = os.path.join(project_dir, ".arh")
     os.makedirs(arh_dir, exist_ok=True)
 
-    actions["arh_md"] = _write_if_absent(
+    actions["arh_md"] = _write_managed_arh_md(
         os.path.join(arh_dir, "ARH.md"), WORKFLOW_RULES_MARKDOWN
     )
     actions["claude_md"] = _append_claude_md_block(project_dir)

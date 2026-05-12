@@ -385,8 +385,9 @@ def main() -> int:
     project_dir = Path(context.get("project_dir") or str(cwd))
     if context.get("project_id_source") not in {"settings", "project_env"}:
         reason = (
-            "Codex hook missing ARH project context; rerun `arh handoff` "
-            "from the tracked project root or run `arh doctor codex`."
+            "Codex hook missing ARH project context; rerun the website setup "
+            "brief from the tracked project root, or run the refreshed "
+            "`uvx --refresh --from ... arh doctor codex` command."
         )
         hc.mark_adapter_status_degraded(project_dir, reason)
         _write_hook_error(
