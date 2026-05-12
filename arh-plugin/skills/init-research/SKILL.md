@@ -177,12 +177,15 @@ Use the highest-quality route available after handoff:
 Do not silently downgrade. If `.arh/adapter-status.json` says the native adapter
 is degraded, follow the MCP route first and the CLI/HTTP routes only when MCP is
 unavailable. If Codex reports `installed_unverified`, the hook files were written
-and trusted, but Codex has not yet proven that project-local hooks can run. If
+and trusted, but Codex has not yet proven that project-local hooks can run. Codex
+does not reload newly installed hooks into the already-loaded setup thread; after
+setup or repair, run `/new` in Codex before research so a fresh thread loads the
+repo-local hooks. Fully reopening Codex in this repository is also OK. If
 Codex reports `installed_untrusted`, the repo-local hook files exist but Codex
 will not execute them until project/hook trust is recorded in `~/.codex/config.toml`;
 run `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook
 command. Run `arh doctor codex` if timeline events do not appear after the first
-turn.
+fresh-thread Codex research turn.
 
 ## Generic agent contract
 If you are not Claude Code or Codex, you can still produce a useful ARH timeline:
@@ -264,7 +267,7 @@ peer-feed inbox. You don't have to push it to them; the platform routes.
 1. If no `project_id` is set, call `/arh:init-research` once to set up.
 2. If `link_git_repo` was not run, register artifacts will fail — fix link first.
 3. If a nudge from the system says "uncommitted changes", call `checkpoint` immediately.
-4. If `.arh/adapter-status.json` says `degraded`, keep working but use MCP/CLI checkpoints more frequently. If it says `installed_untrusted`, run `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook command. If it says `installed_unverified`, run one new Codex turn and verify with `arh doctor codex`.
+4. If `.arh/adapter-status.json` says `degraded`, keep working but use MCP/CLI checkpoints more frequently. If it says `installed_untrusted`, run `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook command. If it says `installed_unverified`, run `/new` in Codex before research, then run one fresh-thread turn and verify with `arh doctor codex`.
 ```
 
 ### 5.5.3: Add reference in CLAUDE.md

@@ -239,6 +239,98 @@ def test_codex_hook_trust_entries_ignore_suffix_impostor(
     assert cli._codex_arh_hook_trust_entries(str(tmp_path)) == []
 
 
+def test_codex_hook_trust_entries_accept_uvx_cached_bundled_handler(
+    tmp_path: Path, monkeypatch
+):
+    current_handler = (
+        tmp_path
+        / "fresh"
+        / "lib"
+        / "python3.13"
+        / "site-packages"
+        / "arh_client"
+        / "_bundled"
+        / "codex-hook-handler.py"
+    )
+    current_handler.parent.mkdir(parents=True)
+    current_handler.write_text("#!/usr/bin/env python3\n")
+    stale_handler = (
+        tmp_path.parent
+        / f"{tmp_path.name}-uv-cache"
+        / "uv-cache"
+        / "lib"
+        / "python3.13"
+        / "site-packages"
+        / "arh_client"
+        / "_bundled"
+        / "codex-hook-handler.py"
+    )
+    stale_handler.parent.mkdir(parents=True)
+    stale_handler.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(current_handler))
+    hooks_dir = tmp_path / ".codex"
+    hooks_dir.mkdir()
+    (hooks_dir / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    event: [
+                        {
+                            "matcher": ".*",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": f"python3 {stale_handler} {event}",
+                                }
+                            ],
+                        }
+                    ]
+                    for event in cli.CODEX_REQUIRED_HOOK_EVENTS
+                }
+            }
+        )
+    )
+
+    entries = cli._codex_arh_hook_trust_entries(str(tmp_path))
+
+    assert {entry["event"] for entry in entries} == set(cli.CODEX_REQUIRED_HOOK_EVENTS)
+
+
+def test_codex_hook_trust_entries_reject_non_package_bundled_impostor(
+    tmp_path: Path, monkeypatch
+):
+    current_handler = tmp_path / "package" / "codex-hook-handler.py"
+    current_handler.parent.mkdir()
+    current_handler.write_text("#!/usr/bin/env python3\n")
+    impostor = tmp_path / "outside" / "arh_client" / "_bundled" / "codex-hook-handler.py"
+    impostor.parent.mkdir(parents=True)
+    impostor.write_text("#!/usr/bin/env python3\n")
+    monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(current_handler))
+    hooks_dir = tmp_path / ".codex"
+    hooks_dir.mkdir()
+    (hooks_dir / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PostToolUse": [
+                        {
+                            "matcher": ".*",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": f"python3 {impostor} PostToolUse",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        )
+    )
+
+    assert cli._codex_arh_hook_trust_entries(str(tmp_path)) == []
+
+
 def test_codex_hook_trust_report_requires_project_trust(
     tmp_path: Path, monkeypatch
 ):
@@ -452,7 +544,16 @@ def test_install_codex_hooks_preserves_unrelated_hooks(tmp_path: Path, monkeypat
     handler = tmp_path / "codex-hook-handler.py"
     handler.write_text("#!/usr/bin/env python3\n")
     monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
-    stale_arh_handler = tmp_path.parent / f"{tmp_path.name}-uv-cache" / "arh_client" / "_bundled" / "codex-hook-handler.py"
+    stale_arh_handler = (
+        tmp_path.parent
+        / f"{tmp_path.name}-uv-cache"
+        / "lib"
+        / "python3.13"
+        / "site-packages"
+        / "arh_client"
+        / "_bundled"
+        / "codex-hook-handler.py"
+    )
     stale_arh_handler.parent.mkdir(parents=True)
     stale_arh_handler.write_text("#!/usr/bin/env python3\n")
     codex_dir = tmp_path / ".codex"
@@ -604,7 +705,16 @@ def test_doctor_codex_fix_repairs_deprecated_hook_config(
 ):
     handler = tmp_path / "fresh-codex-hook-handler.py"
     handler.write_text("#!/usr/bin/env python3\n")
-    stale_arh_handler = tmp_path.parent / f"{tmp_path.name}-uv-cache" / "arh_client" / "_bundled" / "codex-hook-handler.py"
+    stale_arh_handler = (
+        tmp_path.parent
+        / f"{tmp_path.name}-uv-cache"
+        / "lib"
+        / "python3.13"
+        / "site-packages"
+        / "arh_client"
+        / "_bundled"
+        / "codex-hook-handler.py"
+    )
     stale_arh_handler.parent.mkdir(parents=True)
     stale_arh_handler.write_text("#!/usr/bin/env python3\n")
     monkeypatch.setattr(cli, "_find_codex_hook_handler", lambda: str(handler))
@@ -698,7 +808,7 @@ def test_doctor_codex_fix_can_trust_generated_hooks(
     assert report["fix"]["status"] == "installed_unverified"
     assert report["hook_trust"]["all_trusted"] is True
     assert (
-        "Codex hooks are trusted but not verified yet. Start a new Codex session in this repository and run one turn."
+        "Codex hooks are trusted but not verified yet. Run `/new` in Codex before research, or fully reopen Codex in this repository, then run one research turn."
         in report["issues"]
     )
     assert "trusted_hash" in (home / ".codex" / "config.toml").read_text()

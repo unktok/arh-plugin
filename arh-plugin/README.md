@@ -134,7 +134,10 @@ repo-local hooks rather than a global dispatcher because Codex supports project
 config layers and a global hook would start for unrelated Codex projects. Setup
 can report `installed_untrusted` if hook trust is missing, or
 `installed_unverified` if hook trust is present but no real hook event has
-reached ARH yet.
+reached ARH yet. Codex does not reload newly installed hooks into the
+already-loaded setup thread, so after initial setup or a doctor repair, run
+`/new` in Codex before beginning the research task. Fully reopening Codex in the
+repository is also OK.
 
 When diagnosing a landing-page setup, use the refreshed public client:
 

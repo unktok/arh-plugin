@@ -1797,7 +1797,7 @@ def _is_legacy_arh_codex_hook_handler(
             pass
     normalized = handler_abs.replace("\\", "/")
     return (
-        normalized.endswith("/arh_client/_bundled/codex-hook-handler.py")
+        normalized.endswith("/site-packages/arh_client/_bundled/codex-hook-handler.py")
     )
 
 
@@ -1891,6 +1891,8 @@ def _codex_arh_hook_trust_entries(project_dir: str) -> list[dict]:
                         command,
                         event=event,
                         current_handler=current_handler,
+                        allow_legacy=True,
+                        project_dir=project_dir,
                     )
                 ):
                     entries.append(
@@ -1981,8 +1983,10 @@ def _codex_installed_status_from_trust(trust: dict) -> str:
 def _codex_verification_hint(trust: dict) -> str:
     if trust.get("all_trusted"):
         return (
-            "Start a new Codex session in this repository. Run `arh doctor codex` "
-            "if no user/tool/session logs appear after the first turn."
+            "Run `/new` in Codex before research, or fully reopen Codex in "
+            "this repository. "
+            "Run `arh doctor codex` if no user/tool/session logs appear after "
+            "the first fresh-thread research turn."
         )
     return (
         "Codex hook files are installed, but Codex will not execute untrusted "
@@ -2122,6 +2126,8 @@ def cmd_doctor_codex(args):
                                     str(hook_config.get("command") or ""),
                                     event=event,
                                     current_handler=current_handler,
+                                    allow_legacy=True,
+                                    project_dir=project_dir,
                                 )
                                 for hook_config in hook_list
                             ):
@@ -2197,8 +2203,9 @@ def cmd_doctor_codex(args):
         )
     if adapter_status.get("status") == "installed_unverified":
         issues.append(
-            "Codex hooks are trusted but not verified yet. Start a new Codex "
-            "session in this repository and run one turn."
+            "Codex hooks are trusted but not verified yet. Run `/new` in Codex "
+            "before research, or fully reopen Codex in this repository, then "
+            "run one research turn."
         )
     if adapter_status.get("status") == "installed_untrusted":
         issues.append(
