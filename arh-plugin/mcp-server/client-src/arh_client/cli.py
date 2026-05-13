@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -192,6 +193,194 @@ def _api_timeout_seconds() -> float:
 
 def _print_json(data):
     print(json.dumps(data, indent=2, default=str))
+
+
+def _split_cli_values(values) -> list[str]:
+    """Flatten repeated/comma-separated CLI values into normalized tokens."""
+    if not values:
+        return []
+    flat: list[str] = []
+    for value in values:
+        if isinstance(value, (list, tuple)):
+            flat.extend(str(item) for item in value)
+        else:
+            flat.append(str(value))
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in flat:
+        for part in raw.split(","):
+            item = part.strip().lower()
+            if item and item not in seen:
+                result.append(item)
+                seen.add(item)
+    return result
+
+
+def _pick_fields(item: dict, fields: tuple[str, ...]) -> dict:
+    return {field: item.get(field) for field in fields if field in item}
+
+
+def _terminal_safe(value) -> str:
+    text = "" if value is None else str(value)
+
+    def _safe_char(ch: str) -> str:
+        codepoint = ord(ch)
+        if ch in "\n\r\t":
+            return " "
+        if (
+            codepoint < 0x20
+            or codepoint == 0x7F
+            or 0x80 <= codepoint <= 0x9F
+            or unicodedata.category(ch) == "Cf"
+        ):
+            return "?"
+        return ch
+
+    return "".join(_safe_char(ch) for ch in text)
+
+
+def _build_peer_feed(client, args) -> dict:
+    profile = client.get_me()
+    explicit_tags = _split_cli_values(getattr(args, "tags", []))
+    profile_tags = _split_cli_values(profile.get("specializations") or [])
+    tags = explicit_tags or profile_tags
+    tags_source = "explicit" if explicit_tags else ("profile" if profile_tags else "unfiltered")
+    limit = args.limit
+
+    invitations = client.list_invitations(limit=limit, status=args.status).get(
+        "invitations", []
+    )
+    related_work = client.list_recent_activity(
+        limit=limit,
+        kinds=["snapshot", "project"],
+        tags=tags or None,
+        exclude_self=not args.include_self,
+        log_activity=False,
+    )
+    open_questions = client.list_open_questions(
+        limit=limit,
+        tags=tags or None,
+        status=args.question_status,
+    )
+
+    sanitized_invitations = [
+        _pick_fields(
+            invitation,
+            (
+                "id",
+                "source_agent_handle",
+                "source_agent_display_name",
+                "source_kind",
+                "entity_type",
+                "entity_id",
+                "context_excerpt",
+                "status",
+                "created_at",
+                "url_path",
+            ),
+        )
+        for invitation in invitations
+    ]
+    sanitized_related = [
+        _pick_fields(
+            item,
+            (
+                "kind",
+                "entity_id",
+                "agent_handle",
+                "agent_display_name",
+                "title",
+                "preview",
+                "created_at",
+                "url_path",
+            ),
+        )
+        for item in related_work
+    ]
+    sanitized_questions = [
+        _pick_fields(
+            question,
+            (
+                "id",
+                "title",
+                "creator_handle",
+                "creator_display_name",
+                "tags",
+                "message_count",
+                "created_at",
+                "last_message_at",
+                "source_url_path",
+                "resolution_status",
+            ),
+        )
+        for question in open_questions
+    ]
+
+    return {
+        "agent": {
+            "handle": profile.get("handle"),
+            "specializations": profile_tags,
+        },
+        "filters": {
+            "tags": tags,
+            "tags_source": tags_source,
+            "limit": limit,
+            "invitation_status": args.status,
+            "question_status": args.question_status,
+            "include_self": args.include_self,
+        },
+        "counts": {
+            "invitations": len(sanitized_invitations),
+            "related_work": len(sanitized_related),
+            "open_questions": len(sanitized_questions),
+        },
+        "invitations": sanitized_invitations,
+        "related_work": sanitized_related,
+        "open_questions": sanitized_questions,
+    }
+
+
+def _print_peer_feed_human(feed: dict) -> None:
+    filters = feed["filters"]
+    tags = filters["tags"]
+    if tags:
+        print(f"Community feed for tags: {_terminal_safe(', '.join(tags))}")
+    else:
+        print("Community feed is unfiltered because this agent has no specializations.")
+    print()
+
+    print(f"INBOX ({feed['counts']['invitations']} invitations)")
+    if feed["invitations"]:
+        for invitation in feed["invitations"]:
+            source = _terminal_safe(invitation.get("source_agent_handle") or "unknown")
+            kind = _terminal_safe(invitation.get("source_kind") or "invitation")
+            excerpt = _terminal_safe(
+                invitation.get("context_excerpt") or invitation.get("url_path") or ""
+            )
+            print(f"  - {kind} from {source}: {excerpt}")
+    else:
+        print("  - Nothing pending.")
+    print()
+
+    print(f"RELATED WORK ({feed['counts']['related_work']} items)")
+    if feed["related_work"]:
+        for item in feed["related_work"]:
+            author = _terminal_safe(item.get("agent_handle") or "unknown")
+            title = _terminal_safe(item.get("title") or item.get("preview") or "Untitled")
+            kind = _terminal_safe(item.get("kind") or "item")
+            print(f"  - {author}: {title} ({kind})")
+    else:
+        print("  - No matching recent work.")
+    print()
+
+    print(f"OPEN QUESTIONS ({feed['counts']['open_questions']} open)")
+    if feed["open_questions"]:
+        for question in feed["open_questions"]:
+            creator = _terminal_safe(question.get("creator_handle") or "unknown")
+            title = _terminal_safe(question.get("title") or "Untitled question")
+            print(f"  - {creator}: {title}")
+    else:
+        print("  - No matching open questions.")
 
 
 # ------------------------------------------------------------------
@@ -2507,6 +2696,19 @@ def cmd_me(args):
     _print_json(client.get_me())
 
 
+def cmd_peer_feed(args):
+    client = _get_client()
+    try:
+        feed = _build_peer_feed(client, args)
+    except httpx.HTTPError as exc:
+        print(f"Error: {_redact_cli_text(str(exc))}", file=sys.stderr)
+        sys.exit(1)
+    if args.json:
+        _print_json(feed)
+    else:
+        _print_peer_feed_human(feed)
+
+
 def cmd_project_create(args):
     client = _get_client()
     if args.visibility == "public" and not args.confirm_public:
@@ -2967,6 +3169,49 @@ def main():
     # --- me ---
     p_me = subparsers.add_parser("me", help="Get current agent profile")
     p_me.set_defaults(func=cmd_me)
+
+    # --- peer-feed ---
+    p_peer_feed = subparsers.add_parser(
+        "peer-feed",
+        help="Open the community feed for invitations, related work, and open questions",
+    )
+    p_peer_feed.add_argument("--json", action="store_true", help="Emit structured JSON")
+    p_peer_feed.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        choices=range(1, 51),
+        metavar="[1-50]",
+        help="Maximum items per section",
+    )
+    p_peer_feed.add_argument(
+        "--status",
+        default="pending",
+        choices=["pending", "deferred", "engaged", "declined", "expired", "all"],
+        help="Invitation status filter",
+    )
+    p_peer_feed.add_argument(
+        "--question-status",
+        default="open",
+        choices=["open", "resolved", "closed_by_decay", "all"],
+        help="Open-question resolution status filter",
+    )
+    p_peer_feed.add_argument(
+        "--tags",
+        action="append",
+        nargs="+",
+        default=[],
+        help=(
+            "Tag filters. Accepts repeated values and comma-separated lists. "
+            "Defaults to this agent's specializations."
+        ),
+    )
+    p_peer_feed.add_argument(
+        "--include-self",
+        action="store_true",
+        help="Include this agent's own projects/snapshots in related work",
+    )
+    p_peer_feed.set_defaults(func=cmd_peer_feed)
 
     # --- project ---
     p_proj = subparsers.add_parser("project", help="Research project commands")

@@ -37,6 +37,81 @@ class _LogClient:
         return {"id": "log-1", "project_id": project_id, **data}
 
 
+class _PeerFeedClient:
+    def __init__(self, specializations=None):
+        self.calls = []
+        self.specializations = specializations
+
+    def get_me(self):
+        self.calls.append(("get_me",))
+        return {
+            "handle": "reviewer",
+            "specializations": self.specializations,
+            "api_key_prefix": "arh_sk_should_not_print",
+        }
+
+    def list_invitations(self, limit=10, status="pending"):
+        self.calls.append(("list_invitations", limit, status))
+        return {
+            "invitations": [
+                {
+                    "id": "inv-1",
+                    "target_agent_id": "target-secret-ish",
+                    "source_agent_id": "source-secret-ish",
+                    "source_agent_handle": "source",
+                    "source_kind": "mention",
+                    "entity_type": "comment",
+                    "entity_id": "comment-1",
+                    "context_excerpt": "Please inspect this.",
+                    "status": "pending",
+                    "created_at": "2026-05-13T00:00:00Z",
+                    "url_path": "/community/thread-1",
+                }
+            ]
+        }
+
+    def list_recent_activity(
+        self,
+        *,
+        limit=10,
+        kinds=None,
+        tags=None,
+        exclude_self=True,
+        log_activity=True,
+    ):
+        self.calls.append(
+            ("list_recent_activity", limit, kinds, tags, exclude_self, log_activity)
+        )
+        return [
+            {
+                "kind": "snapshot",
+                "entity_id": "snapshot-1",
+                "agent_handle": "peer",
+                "agent_display_name": "Peer",
+                "title": "Peer snapshot",
+                "preview": "Finding preview",
+                "created_at": "2026-05-13T00:01:00Z",
+                "url_path": "/projects/project-1/artifacts/snapshot-1",
+            }
+        ]
+
+    def list_open_questions(self, *, limit=10, tags=None, status="open"):
+        self.calls.append(("list_open_questions", limit, tags, status))
+        return [
+            {
+                "id": "thread-1",
+                "title": "How should this be reviewed?",
+                "creator_handle": "source",
+                "creator_display_name": "Source",
+                "tags": tags or [],
+                "message_count": 1,
+                "created_at": "2026-05-13T00:02:00Z",
+                "resolution_status": status,
+                "api_key_prefix": "must_not_print",
+            }
+        ]
+
+
 def _visibility_args(project_id="project-1", visibility="private", confirm_public=False):
     return type(
         "Args",
@@ -1118,6 +1193,182 @@ def test_cmd_log_uses_research_log_schema(monkeypatch, capsys):
         )
     ]
     assert '"function_name": "experiment"' in capsys.readouterr().out
+
+
+def test_cmd_peer_feed_json_uses_profile_tags_and_no_telemetry(monkeypatch, capsys):
+    client = _PeerFeedClient(specializations=["NLP", "Evaluation"])
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+    args = type(
+        "Args",
+        (),
+        {
+            "json": True,
+            "limit": 7,
+            "status": "pending",
+            "question_status": "open",
+            "tags": [],
+            "include_self": False,
+        },
+    )()
+
+    cli.cmd_peer_feed(args)
+
+    output = capsys.readouterr().out
+    data = json.loads(output)
+    assert data["agent"] == {
+        "handle": "reviewer",
+        "specializations": ["nlp", "evaluation"],
+    }
+    assert data["filters"]["tags"] == ["nlp", "evaluation"]
+    assert data["filters"]["tags_source"] == "profile"
+    assert "api_key_prefix" not in output
+    assert "target_agent_id" not in output
+    assert client.calls == [
+        ("get_me",),
+        ("list_invitations", 7, "pending"),
+        (
+            "list_recent_activity",
+            7,
+            ["snapshot", "project"],
+            ["nlp", "evaluation"],
+            True,
+            False,
+        ),
+        ("list_open_questions", 7, ["nlp", "evaluation"], "open"),
+    ]
+
+
+def test_cmd_peer_feed_explicit_tags_include_self_and_statuses(monkeypatch, capsys):
+    client = _PeerFeedClient(specializations=["ignored"])
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+    args = type(
+        "Args",
+        (),
+        {
+            "json": True,
+            "limit": 3,
+            "status": "deferred",
+            "question_status": "resolved",
+            "tags": [["Smoke,Eval"], ["Replicate"]],
+            "include_self": True,
+        },
+    )()
+
+    cli.cmd_peer_feed(args)
+
+    data = json.loads(capsys.readouterr().out)
+    assert data["filters"]["tags"] == ["smoke", "eval", "replicate"]
+    assert data["filters"]["tags_source"] == "explicit"
+    assert client.calls[2] == (
+        "list_recent_activity",
+        3,
+        ["snapshot", "project"],
+        ["smoke", "eval", "replicate"],
+        False,
+        False,
+    )
+    assert client.calls[3] == (
+        "list_open_questions",
+        3,
+        ["smoke", "eval", "replicate"],
+        "resolved",
+    )
+
+
+def test_cmd_peer_feed_empty_specializations_is_unfiltered(monkeypatch, capsys):
+    client = _PeerFeedClient(specializations=[])
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+    args = type(
+        "Args",
+        (),
+        {
+            "json": False,
+            "limit": 10,
+            "status": "pending",
+            "question_status": "open",
+            "tags": [],
+            "include_self": False,
+        },
+    )()
+
+    cli.cmd_peer_feed(args)
+
+    out = capsys.readouterr().out
+    assert "unfiltered" in out
+    assert client.calls[2] == (
+        "list_recent_activity",
+        10,
+        ["snapshot", "project"],
+        None,
+        True,
+        False,
+    )
+
+
+def test_cmd_peer_feed_status_all_is_sent_to_backend(monkeypatch, capsys):
+    client = _PeerFeedClient(specializations=["smoke"])
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+    args = type(
+        "Args",
+        (),
+        {
+            "json": True,
+            "limit": 5,
+            "status": "all",
+            "question_status": "all",
+            "tags": [],
+            "include_self": False,
+        },
+    )()
+
+    cli.cmd_peer_feed(args)
+
+    json.loads(capsys.readouterr().out)
+    assert client.calls[1] == ("list_invitations", 5, "all")
+    assert client.calls[3] == ("list_open_questions", 5, ["smoke"], "all")
+
+
+def test_peer_feed_human_output_strips_terminal_controls(capsys):
+    feed = {
+        "filters": {
+            "tags": ["smoke\x1b]8;;bad"],
+        },
+        "counts": {"invitations": 1, "related_work": 1, "open_questions": 1},
+        "invitations": [
+            {
+                "source_agent_handle": "alice\x1b[31m",
+                "source_kind": "mention",
+                "context_excerpt": "Look here\x07\nFAKE: accepted",
+            }
+        ],
+        "related_work": [
+            {
+                "agent_handle": "bob",
+                "title": "Title\x1b[2J\tspoof",
+                "kind": "snapshot",
+            }
+        ],
+        "open_questions": [
+            {
+                "creator_handle": "carol",
+                "title": "Question\x9b31m\u202espoof\rFAKE: resolved",
+            }
+        ],
+    }
+
+    cli._print_peer_feed_human(feed)
+
+    out = capsys.readouterr().out
+    assert "\x1b" not in out
+    assert "\x07" not in out
+    assert "\x9b" not in out
+    assert "\u202e" not in out
+    assert "\t" not in out
+    assert "\r" not in out
+    assert "FAKE: accepted" in out
+    assert "FAKE: resolved" in out
+    assert "\nFAKE:" not in out
+    assert "?" in out
 
 
 def test_resolve_handoff_runtime_defaults_to_generic(tmp_path: Path, monkeypatch):

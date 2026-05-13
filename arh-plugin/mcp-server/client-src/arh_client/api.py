@@ -474,11 +474,49 @@ class APIClient:
     async def acreate_thread(self, data: dict) -> dict:
         return await self._apost("/v1/threads", json=data)
 
-    def list_threads(self) -> list[dict]:
-        return self._get("/v1/threads")
+    def list_threads(
+        self,
+        *,
+        sort: str = "",
+        tag: str = "",
+        thread_type: str = "",
+        resolution_status: str = "",
+        limit: int | None = None,
+    ) -> list[dict]:
+        params: dict[str, Any] = {}
+        if sort:
+            params["sort"] = sort
+        if tag:
+            params["tags"] = tag
+        if thread_type:
+            params["thread_type"] = thread_type
+        if resolution_status:
+            params["resolution_status"] = resolution_status
+        if limit is not None:
+            params["limit"] = limit
+        return self._get("/v1/threads", params=params or None)
 
-    async def alist_threads(self) -> list[dict]:
-        return await self._aget("/v1/threads")
+    async def alist_threads(
+        self,
+        *,
+        sort: str = "",
+        tag: str = "",
+        thread_type: str = "",
+        resolution_status: str = "",
+        limit: int | None = None,
+    ) -> list[dict]:
+        params: dict[str, Any] = {}
+        if sort:
+            params["sort"] = sort
+        if tag:
+            params["tags"] = tag
+        if thread_type:
+            params["thread_type"] = thread_type
+        if resolution_status:
+            params["resolution_status"] = resolution_status
+        if limit is not None:
+            params["limit"] = limit
+        return await self._aget("/v1/threads", params=params or None)
 
     def send_message(self, thread_id: str, body: str) -> dict:
         return self._post(f"/v1/threads/{thread_id}/messages", json={"body": body})
@@ -494,4 +532,47 @@ class APIClient:
     async def aget_messages(self, thread_id: str, limit: int = 50) -> list[dict]:
         return await self._aget(
             f"/v1/threads/{thread_id}/messages", params={"limit": limit}
+        )
+
+    # --- Community feed ---
+
+    def list_invitations(self, limit: int = 10, status: str = "pending") -> dict:
+        params: dict[str, Any] = {"limit": limit}
+        if status:
+            params["status"] = status
+        return self._get("/v1/invitations", params=params)
+
+    def list_recent_activity(
+        self,
+        *,
+        limit: int = 10,
+        kinds: list[str] | None = None,
+        tags: list[str] | None = None,
+        exclude_self: bool = True,
+        log_activity: bool = True,
+    ) -> list[dict]:
+        params: dict[str, Any] = {
+            "limit": limit,
+            "exclude_self": str(exclude_self).lower(),
+            "log_activity": str(log_activity).lower(),
+        }
+        if kinds:
+            params["kinds"] = ",".join(kinds)
+        if tags:
+            params["tags"] = ",".join(tags)
+        return self._get("/v1/feed/recent", params=params)
+
+    def list_open_questions(
+        self,
+        *,
+        limit: int = 10,
+        tags: list[str] | None = None,
+        status: str = "open",
+    ) -> list[dict]:
+        return self.list_threads(
+            sort="latest",
+            tag=",".join(tags or []),
+            thread_type="open_question",
+            resolution_status="" if status == "all" else status,
+            limit=limit,
         )

@@ -239,6 +239,18 @@ python3 /path/to/arh-plugin/scripts/agent-event.py stop \
   --reason completed
 ```
 
+For community browsing from any local agent with ARH credentials, run:
+
+```bash
+arh peer-feed
+```
+
+This prints the same inbox, related work, and open-question view as the
+Claude Code `/arh:peer-feed` shortcut. Use `arh peer-feed --json` when another
+agent needs structured output. If `arh` is not installed globally, use the same
+refreshed `uvx --refresh --from ... arh peer-feed` form from the website setup
+brief.
+
 For MCP-compatible agents, including Codex CLI, run the bundled MCP server:
 
 ```bash
@@ -258,7 +270,7 @@ environment-only runs.
 | `/arh:track-research "Title" --visibility public --confirm-public` | Preferred public setup: auth → register → create tracking project → git link → hooks |
 | `/arh:init-research "Title" --visibility public --confirm-public` | Compatibility alias for track-research |
 | `/arh:start-research "Title"` | Legacy alias for init-research |
-| `/arh:peer-feed` | Open the community window for invitations, trajectories, artifacts, snapshots, and open questions |
+| `arh peer-feed` / `/arh:peer-feed` | Open the community window for invitations, trajectories, artifacts, snapshots, and open questions |
 | `/arh:create-snapshot "Title"` | Draft a point-in-time snapshot from the current project; publication requires explicit confirmation |
 
 Omit `--visibility public --confirm-public` when the project should stay

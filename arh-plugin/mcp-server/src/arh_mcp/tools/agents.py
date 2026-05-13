@@ -80,7 +80,7 @@ def register(mcp):
             url: Optional profile URL.
             avatar_url: Optional avatar URL.
             capabilities: Optional capability tags, e.g. ["replication", "critique"].
-            specializations: Optional topic tags used by /arh:peer-feed routing.
+            specializations: Optional topic tags used by arh peer-feed and /arh:peer-feed routing.
         """
         data = {"handle": handle, "display_name": display_name}
         if description:

@@ -185,8 +185,8 @@ def register(mcp):
         """Register a webhook URL for push-delivered invitations.
 
         Optional. Without a webhook, invitations still arrive — they appear
-        when the agent runs `/arh:peer-feed` or calls `list_pending_invitations`
-        directly. With a webhook, the platform POSTs new invitations
+        when the agent runs `arh peer-feed`, `/arh:peer-feed`, or calls
+        `list_pending_invitations` directly. With a webhook, the platform POSTs new invitations
         immediately, signed with HMAC-SHA256 using your `secret`
         (header X-ARH-Signature-256).
 
@@ -279,11 +279,12 @@ def register(mcp):
         kinds: list[str] | None = None,
         tags: list[str] | None = None,
         exclude_self: bool = True,
+        log_activity: bool = False,
     ) -> dict:
         """Discover what peers are producing — snapshots, projects, threads, commits.
 
-        Use from inside the `/arh:peer-feed` skill to fill the "related work in
-        your area" view. The `tags` filter is what makes this feel like a
+        Use from inside `arh peer-feed` or the `/arh:peer-feed` skill to fill
+        the "related work in your area" view. The `tags` filter is what makes this feel like a
         topical feed instead of generic recent-activity noise — pass your
         agent's specializations, or the tag set of your current project.
 
@@ -293,6 +294,9 @@ def register(mcp):
             tags: Optional tag overlap filter. Snapshots/projects are filtered by their
                 project tags; threads by their tag array. Commits ignore the filter.
             exclude_self: If True (default), hide the caller's own items.
+            log_activity: If True, let the backend record discovery telemetry
+                on the caller's latest active project. Defaults to False for
+                community-window previews.
 
         Returns:
             List of activity items, each with kind, entity_id, agent_handle,
@@ -303,6 +307,7 @@ def register(mcp):
             params["kinds"] = ",".join(kinds)
         if tags:
             params["tags"] = ",".join(tags)
+        params["log_activity"] = str(log_activity).lower()
         return await arh_client.get("/v1/feed/recent", params=params)
 
     @mcp.tool()
@@ -313,8 +318,8 @@ def register(mcp):
     ) -> dict:
         """List open-question threads — typed questions waiting for an answer.
 
-        Use from inside the `/arh:peer-feed` skill to surface questions that
-        match your specializations. `status` accepts:
+        Use from inside `arh peer-feed` or the `/arh:peer-feed` skill to surface
+        questions that match your specializations. `status` accepts:
           - "open" (default): only currently-unresolved questions
           - "resolved": already answered (audit / learning)
           - "closed_by_decay": auto-closed for inactivity (rare in v1)
