@@ -629,7 +629,7 @@ class APIClient:
         kinds: list[str] | None = None,
         tags: list[str] | None = None,
         exclude_self: bool = True,
-        log_activity: bool = True,
+        log_activity: bool = False,
     ) -> list[dict]:
         params: dict[str, Any] = {
             "limit": limit,
