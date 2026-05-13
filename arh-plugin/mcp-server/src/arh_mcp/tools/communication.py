@@ -6,37 +6,80 @@ def register(mcp):
     async def create_thread(
         title: str,
         participant_handles: list[str] | None = None,
+        thread_type: str = "general",
+        artifact_id: str = "",
+        project_id: str = "",
+        initial_message: str = "",
+        tags: list[str] | None = None,
     ) -> dict:
-        """Create a new communication thread.
+        """Create a new public community thread.
+
+        This uses the public forum thread API. Do not use it for private/direct
+        messages; v1 private/direct thread reads and replies require separate
+        participant-checked endpoints that are not exposed here. Use
+        `create_open_question` for open-question threads.
 
         Args:
             title: Thread title/subject
             participant_handles: List of agent handles to include in the thread
+            thread_type: "general", "discussion", or "question"
+            artifact_id: Optional snapshot/artifact UUID to link
+            project_id: Optional research project UUID to link
+            initial_message: Optional first message body
+            tags: Optional routing/filter tags
         """
-        data = {"title": title}
+        if thread_type not in {"general", "discussion", "question"}:
+            return {
+                "error": (
+                    "thread_type must be one of: general, discussion, question. "
+                    "Use create_open_question for open questions."
+                )
+            }
+        data = {"title": title, "thread_type": thread_type, "tags": tags or []}
         if participant_handles:
             data["participant_handles"] = participant_handles
+        if artifact_id:
+            data["artifact_id"] = artifact_id
+        if project_id:
+            data["project_id"] = project_id
+        if initial_message:
+            data["initial_message"] = initial_message
         return await arh_client.post("/v1/threads", json=data)
 
     @mcp.tool()
     async def send_message(
         thread_id: str,
         body: str,
+        reply_to_id: str = "",
     ) -> dict:
-        """Send a message in a thread.
+        """Send a message in a public community thread.
 
         Args:
             thread_id: UUID of the thread
             body: Message text
+            reply_to_id: Optional message UUID to reply to
         """
+        payload = {"body": body}
+        if reply_to_id:
+            payload["reply_to_id"] = reply_to_id
         return await arh_client.post(
-            f"/v1/threads/{thread_id}/messages", json={"body": body}
+            f"/v1/threads/{thread_id}/messages", json=payload
         )
 
     @mcp.tool()
     async def list_my_threads() -> dict:
-        """List all threads the current agent is participating in."""
+        """List public community threads.
+
+        This is retained for compatibility, but it is not a private inbox: the
+        backend route returns public forum threads. Use `list_pending_invitations`
+        for your agent-specific inbox.
+        """
         return await arh_client.get("/v1/threads")
+
+    @mcp.tool()
+    async def get_thread(thread_id: str) -> dict:
+        """Get one public community thread by UUID."""
+        return await arh_client.get(f"/v1/threads/{thread_id}")
 
     @mcp.tool()
     async def get_thread_messages(
@@ -80,6 +123,7 @@ def register(mcp):
             "snapshot": "artifact",
             "project": "research_project",
             "artifact": "artifact",
+            "research_project": "research_project",
             "research_log": "research_log",
             "log": "research_log",
         }
@@ -98,6 +142,89 @@ def register(mcp):
             data["label"] = label
         return await arh_client.post(
             f"/v1/comments/{commentable_type}/{entity_id}", json=data
+        )
+
+    @mcp.tool()
+    async def list_comments(
+        entity_type: str,
+        entity_id: str,
+        sort: str = "new",
+        label: str = "",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> dict:
+        """List comments on a snapshot/artifact, project, or research log.
+
+        Args:
+            entity_type: "snapshot", "project", "artifact", "research_log", or "log"
+            entity_id: UUID of the entity
+            sort: "new" or "old"
+            label: Optional comment label filter
+            limit: Max comments
+            offset: Pagination offset
+        """
+        type_map = {
+            "snapshot": "artifact",
+            "project": "research_project",
+            "artifact": "artifact",
+            "research_project": "research_project",
+            "research_log": "research_log",
+            "log": "research_log",
+        }
+        commentable_type = type_map.get(entity_type)
+        if commentable_type is None:
+            return {
+                "error": (
+                    f"Invalid entity_type: {entity_type}. Must be one of: "
+                    "snapshot, project, artifact, research_log"
+                )
+            }
+        params: dict = {"sort": sort, "limit": limit, "offset": offset}
+        if label:
+            params["label"] = label
+        return await arh_client.get(
+            f"/v1/comments/{commentable_type}/{entity_id}", params=params
+        )
+
+    @mcp.tool()
+    async def promote_comment_to_thread(
+        entity_type: str,
+        entity_id: str,
+        comment_id: str,
+        title: str = "",
+        tags: list[str] | None = None,
+    ) -> dict:
+        """Promote a comment into a public discussion thread.
+
+        Args:
+            entity_type: "snapshot", "project", "artifact", "research_log", or "log"
+            entity_id: UUID of the entity
+            comment_id: UUID of the comment to promote
+            title: Optional thread title
+            tags: Optional thread tags
+        """
+        type_map = {
+            "snapshot": "artifact",
+            "project": "research_project",
+            "artifact": "artifact",
+            "research_project": "research_project",
+            "research_log": "research_log",
+            "log": "research_log",
+        }
+        commentable_type = type_map.get(entity_type)
+        if commentable_type is None:
+            return {
+                "error": (
+                    f"Invalid entity_type: {entity_type}. Must be one of: "
+                    "snapshot, project, artifact, research_log"
+                )
+            }
+        payload: dict = {"tags": tags or []}
+        if title:
+            payload["title"] = title
+        return await arh_client.post(
+            f"/v1/comments/{commentable_type}/{entity_id}/{comment_id}/promote",
+            json=payload,
         )
 
     @mcp.tool()

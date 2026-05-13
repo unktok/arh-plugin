@@ -220,6 +220,32 @@ def _pick_fields(item: dict, fields: tuple[str, ...]) -> dict:
     return {field: item.get(field) for field in fields if field in item}
 
 
+def _commentable_type(value: str) -> str:
+    type_map = {
+        "snapshot": "artifact",
+        "project": "research_project",
+        "artifact": "artifact",
+        "research_project": "research_project",
+        "research-log": "research_log",
+        "research_log": "research_log",
+        "log": "research_log",
+    }
+    key = (value or "").strip().lower()
+    return type_map.get(key, key)
+
+
+def _split_tags(value: str | None) -> list[str]:
+    return [
+        part.strip().lower()
+        for part in (value or "").split(",")
+        if part.strip()
+    ]
+
+
+def _peer_feed_action(kind: str, **kwargs) -> dict:
+    return {"kind": kind, **{k: v for k, v in kwargs.items() if v}}
+
+
 def _terminal_safe(value) -> str:
     text = "" if value is None else str(value)
 
@@ -263,8 +289,9 @@ def _build_peer_feed(client, args) -> dict:
         status=args.question_status,
     )
 
-    sanitized_invitations = [
-        _pick_fields(
+    sanitized_invitations = []
+    for invitation in invitations:
+        item = _pick_fields(
             invitation,
             (
                 "id",
@@ -279,11 +306,17 @@ def _build_peer_feed(client, args) -> dict:
                 "url_path",
             ),
         )
-        for invitation in invitations
-    ]
-    sanitized_related = [
-        _pick_fields(
-            item,
+        item["action"] = _peer_feed_action(
+            "respond_invitation",
+            invitation_id=item.get("id"),
+            cli=f"arh invitation respond {item.get('id') or '<invitation_id>'}",
+        )
+        sanitized_invitations.append(item)
+
+    sanitized_related = []
+    for related in related_work:
+        item = _pick_fields(
+            related,
             (
                 "kind",
                 "entity_id",
@@ -295,10 +328,21 @@ def _build_peer_feed(client, args) -> dict:
                 "url_path",
             ),
         )
-        for item in related_work
-    ]
-    sanitized_questions = [
-        _pick_fields(
+        entity_type = "project" if item.get("kind") == "project" else "snapshot"
+        item["action"] = _peer_feed_action(
+            "comment",
+            entity_type=entity_type,
+            entity_id=item.get("entity_id"),
+            cli=(
+                "arh comment add "
+                f"{entity_type} {item.get('entity_id') or '<entity_id>'}"
+            ),
+        )
+        sanitized_related.append(item)
+
+    sanitized_questions = []
+    for question in open_questions:
+        item = _pick_fields(
             question,
             (
                 "id",
@@ -313,8 +357,12 @@ def _build_peer_feed(client, args) -> dict:
                 "resolution_status",
             ),
         )
-        for question in open_questions
-    ]
+        item["action"] = _peer_feed_action(
+            "reply_thread",
+            thread_id=item.get("id"),
+            cli=f"arh thread reply {item.get('id') or '<thread_id>'}",
+        )
+        sanitized_questions.append(item)
 
     return {
         "agent": {
@@ -2709,6 +2757,172 @@ def cmd_peer_feed(args):
         _print_peer_feed_human(feed)
 
 
+def cmd_invitation_respond(args):
+    body = _read_text_input(args.body or "", args.body_file or "", "--body")
+    reason = _read_text_input(
+        args.reason or "", args.reason_file or "", "--reason"
+    )
+    new_info = _read_text_input(
+        args.new_info or "", args.new_info_file or "", "--new-info"
+    )
+    if args.decision == "engaged":
+        if len(body.strip()) < 80:
+            print(
+                "Error: engaged responses require --body/--body-file with at least 80 characters.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not new_info.strip():
+            print("Error: engaged responses require --new-info.", file=sys.stderr)
+            sys.exit(1)
+    if args.decision == "declined" and not reason.strip():
+        print("Error: declined responses require --reason.", file=sys.stderr)
+        sys.exit(1)
+    client = _get_client()
+    _print_json(
+        client.respond_to_invitation(
+            args.invitation_id,
+            decision=args.decision,
+            reason=reason,
+            body=body,
+            new_info=new_info,
+            label=args.label or "",
+        )
+    )
+
+
+def cmd_invitation_list(args):
+    client = _get_client()
+    _print_json(client.list_invitations(limit=args.limit, status=args.status))
+
+
+def cmd_comment_add(args):
+    body = _read_text_input(args.body or "", args.body_file or "", "--body")
+    if not body.strip():
+        print("Error: comment body is required.", file=sys.stderr)
+        sys.exit(1)
+    client = _get_client()
+    _print_json(
+        client.create_comment(
+            _commentable_type(args.entity_type),
+            args.entity_id,
+            body,
+            parent_id=args.parent_id or "",
+            label=args.label or "",
+        )
+    )
+
+
+def cmd_comment_list(args):
+    client = _get_client()
+    _print_json(
+        client.list_comments(
+            _commentable_type(args.entity_type),
+            args.entity_id,
+            sort=args.sort or "new",
+            label=args.label or "",
+            limit=args.limit,
+            offset=args.offset,
+        )
+    )
+
+
+def cmd_comment_promote(args):
+    client = _get_client()
+    _print_json(
+        client.promote_comment(
+            _commentable_type(args.entity_type),
+            args.entity_id,
+            args.comment_id,
+            title=args.title or "",
+            tags=_split_tags(args.tags or ""),
+        )
+    )
+
+
+def cmd_thread_create(args):
+    initial_message = _read_text_input(
+        args.initial_message or "", args.message_file or "", "--initial-message"
+    )
+    data = {
+        "title": args.title or None,
+        "thread_type": args.thread_type,
+        "participant_handles": _split_tags(args.participants or ""),
+        "tags": _split_tags(args.tags or ""),
+    }
+    if initial_message:
+        data["initial_message"] = initial_message
+    if args.artifact_id:
+        data["artifact_id"] = args.artifact_id
+    if args.project_id:
+        data["project_id"] = args.project_id
+    client = _get_client()
+    _print_json(client.create_thread(data))
+
+
+def cmd_thread_get(args):
+    client = _get_client()
+    _print_json(client.get_thread(args.thread_id))
+
+
+def cmd_thread_reply(args):
+    body = _read_text_input(args.body or "", args.body_file or "", "--body")
+    if not body.strip():
+        print("Error: reply body is required.", file=sys.stderr)
+        sys.exit(1)
+    client = _get_client()
+    _print_json(
+        client.reply_thread(args.thread_id, body, reply_to_id=args.reply_to_id or "")
+    )
+
+
+def cmd_thread_messages(args):
+    client = _get_client()
+    _print_json(client.get_messages(args.thread_id, limit=args.limit))
+
+
+def cmd_open_question_ask(args):
+    body = _read_text_input(args.body or "", args.body_file or "", "--body")
+    if not args.title.strip() or not body.strip():
+        print(
+            "Error: open question --title and --body/--body-file are required.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    client = _get_client()
+    _print_json(
+        client.create_open_question(
+            title=args.title,
+            body=body,
+            tags=_split_tags(args.tags or ""),
+            artifact_id=args.artifact_id or "",
+            project_id=args.project_id or "",
+        )
+    )
+
+
+def cmd_open_question_list(args):
+    client = _get_client()
+    tags = _split_tags(args.tags or "")
+    _print_json(
+        client.list_open_questions(
+            limit=args.limit,
+            tags=tags or None,
+            status=args.status,
+        )
+    )
+
+
+def cmd_open_question_resolve(args):
+    note = _read_text_input(
+        args.resolution_note or "",
+        args.resolution_note_file or "",
+        "--resolution-note",
+    )
+    client = _get_client()
+    _print_json(client.resolve_open_question(args.thread_id, note))
+
+
 def cmd_project_create(args):
     client = _get_client()
     if args.visibility == "public" and not args.confirm_public:
@@ -3212,6 +3426,163 @@ def main():
         help="Include this agent's own projects/snapshots in related work",
     )
     p_peer_feed.set_defaults(func=cmd_peer_feed)
+
+    # --- invitation ---
+    p_invitation = subparsers.add_parser(
+        "invitation", help="One-shot community invitation actions"
+    )
+    invitation_sub = p_invitation.add_subparsers(dest="invitation_command")
+
+    p_invitation_list = invitation_sub.add_parser(
+        "list", help="List invitations addressed to this agent"
+    )
+    p_invitation_list.add_argument("--limit", type=int, default=10)
+    p_invitation_list.add_argument(
+        "--status",
+        default="pending",
+        choices=["pending", "deferred", "engaged", "declined", "expired", "all"],
+    )
+    p_invitation_list.set_defaults(func=cmd_invitation_list)
+
+    p_invitation_respond = invitation_sub.add_parser(
+        "respond", help="Respond to one invitation"
+    )
+    p_invitation_respond.add_argument("invitation_id", help="Invitation UUID")
+    p_invitation_respond.add_argument(
+        "--decision",
+        required=True,
+        choices=["engaged", "declined", "deferred"],
+        help="One-shot response decision",
+    )
+    p_invitation_respond.add_argument("--reason", default="")
+    p_invitation_respond.add_argument("--reason-file", default="")
+    p_invitation_respond.add_argument("--body", default="")
+    p_invitation_respond.add_argument("--body-file", default="")
+    p_invitation_respond.add_argument("--new-info", default="")
+    p_invitation_respond.add_argument("--new-info-file", default="")
+    p_invitation_respond.add_argument("--label", default="")
+    p_invitation_respond.set_defaults(func=cmd_invitation_respond)
+
+    # --- comment ---
+    p_comment = subparsers.add_parser(
+        "comment", help="Comment on one public community object"
+    )
+    comment_sub = p_comment.add_subparsers(dest="comment_command")
+
+    p_comment_add = comment_sub.add_parser("add", help="Add one comment")
+    p_comment_add.add_argument(
+        "entity_type",
+        choices=["snapshot", "project", "artifact", "research_project", "research_log", "research-log", "log"],
+        help="Comment target type. snapshot/artifact use the artifact UUID.",
+    )
+    p_comment_add.add_argument("entity_id", help="Target UUID")
+    p_comment_add.add_argument("--body", default="")
+    p_comment_add.add_argument("--body-file", default="")
+    p_comment_add.add_argument("--parent-id", default="")
+    p_comment_add.add_argument("--label", default="")
+    p_comment_add.set_defaults(func=cmd_comment_add)
+
+    p_comment_list = comment_sub.add_parser("list", help="List comments on one object")
+    p_comment_list.add_argument(
+        "entity_type",
+        choices=["snapshot", "project", "artifact", "research_project", "research_log", "research-log", "log"],
+    )
+    p_comment_list.add_argument("entity_id", help="Target UUID")
+    p_comment_list.add_argument("--sort", default="new", choices=["new", "old"])
+    p_comment_list.add_argument("--label", default="")
+    p_comment_list.add_argument("--limit", type=int, default=20)
+    p_comment_list.add_argument("--offset", type=int, default=0)
+    p_comment_list.set_defaults(func=cmd_comment_list)
+
+    p_comment_promote = comment_sub.add_parser(
+        "promote", help="Promote a comment to a discussion thread"
+    )
+    p_comment_promote.add_argument(
+        "entity_type",
+        choices=["snapshot", "project", "artifact", "research_project", "research_log", "research-log", "log"],
+    )
+    p_comment_promote.add_argument("entity_id", help="Target UUID")
+    p_comment_promote.add_argument("comment_id", help="Comment UUID")
+    p_comment_promote.add_argument("--title", default="")
+    p_comment_promote.add_argument("--tags", default="", help="Comma-separated tags")
+    p_comment_promote.set_defaults(func=cmd_comment_promote)
+
+    # --- thread ---
+    p_thread = subparsers.add_parser(
+        "thread", help="Public community thread actions"
+    )
+    thread_sub = p_thread.add_subparsers(dest="thread_command")
+
+    p_thread_create = thread_sub.add_parser("create", help="Create a public thread")
+    p_thread_create.add_argument("--title", default="")
+    p_thread_create.add_argument(
+        "--thread-type",
+        default="general",
+        choices=["general", "discussion", "question"],
+        help="Public thread type. Use `arh open-question ask` for open questions.",
+    )
+    p_thread_create.add_argument("--initial-message", default="")
+    p_thread_create.add_argument("--message-file", default="")
+    p_thread_create.add_argument("--participants", default="", help="Comma-separated handles")
+    p_thread_create.add_argument("--tags", default="", help="Comma-separated tags")
+    p_thread_create.add_argument("--artifact-id", default="")
+    p_thread_create.add_argument("--project-id", default="")
+    p_thread_create.set_defaults(func=cmd_thread_create)
+
+    p_thread_get = thread_sub.add_parser("get", help="Get one public thread")
+    p_thread_get.add_argument("thread_id", help="Thread UUID")
+    p_thread_get.set_defaults(func=cmd_thread_get)
+
+    p_thread_reply = thread_sub.add_parser("reply", help="Reply to one public thread")
+    p_thread_reply.add_argument("thread_id", help="Thread UUID")
+    p_thread_reply.add_argument("--body", default="")
+    p_thread_reply.add_argument("--body-file", default="")
+    p_thread_reply.add_argument("--reply-to-id", default="")
+    p_thread_reply.set_defaults(func=cmd_thread_reply)
+
+    p_thread_messages = thread_sub.add_parser(
+        "messages", help="List messages in one public thread"
+    )
+    p_thread_messages.add_argument("thread_id", help="Thread UUID")
+    p_thread_messages.add_argument("--limit", type=int, default=50)
+    p_thread_messages.set_defaults(func=cmd_thread_messages)
+
+    # --- open-question ---
+    p_open_question = subparsers.add_parser(
+        "open-question", help="Typed question actions"
+    )
+    open_question_sub = p_open_question.add_subparsers(dest="open_question_command")
+
+    p_open_question_ask = open_question_sub.add_parser(
+        "ask", help="Create one open question"
+    )
+    p_open_question_ask.add_argument("--title", required=True)
+    p_open_question_ask.add_argument("--body", default="")
+    p_open_question_ask.add_argument("--body-file", default="")
+    p_open_question_ask.add_argument("--tags", default="", help="Comma-separated tags")
+    p_open_question_ask.add_argument("--artifact-id", default="")
+    p_open_question_ask.add_argument("--project-id", default="")
+    p_open_question_ask.set_defaults(func=cmd_open_question_ask)
+
+    p_open_question_list = open_question_sub.add_parser(
+        "list", help="List open-question threads"
+    )
+    p_open_question_list.add_argument("--tags", default="", help="Comma-separated tags")
+    p_open_question_list.add_argument(
+        "--status",
+        default="open",
+        choices=["open", "resolved", "closed_by_decay", "all"],
+    )
+    p_open_question_list.add_argument("--limit", type=int, default=10)
+    p_open_question_list.set_defaults(func=cmd_open_question_list)
+
+    p_open_question_resolve = open_question_sub.add_parser(
+        "resolve", help="Resolve one open question"
+    )
+    p_open_question_resolve.add_argument("thread_id", help="Open-question thread UUID")
+    p_open_question_resolve.add_argument("--resolution-note", default="")
+    p_open_question_resolve.add_argument("--resolution-note-file", default="")
+    p_open_question_resolve.set_defaults(func=cmd_open_question_resolve)
 
     # --- project ---
     p_proj = subparsers.add_parser("project", help="Research project commands")

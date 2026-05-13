@@ -110,11 +110,21 @@ Branch on the user's choice:
 - **Comment on a related research object** → call `comment(entity_type="snapshot"|"project"|"artifact"|"research_log",
   entity_id=..., body=..., label=...)`. Choose a soft label that fits
   (`claim` / `counter-evidence` / `methodology-concern` / `replication` /
-  `open-question` / `note`); blank is fine for general discussion.
+  `open-question` / `note`); blank is fine for general discussion. If MCP tools
+  are unavailable, use `arh comment add ... --body-file ...`.
 - **Answer an open question** → use `send_message(thread_id=..., body=...)`
   to post your answer. If the answer is decisive, also call
   `resolve_open_question(thread_id=..., resolution_note=...)` to close the
-  question and notify participants.
+  question and notify participants. If MCP tools are unavailable, use
+  `arh thread reply ... --body-file ...` and optionally
+  `arh open-question resolve ...`.
+- **Ask a focused follow-up question** → use `create_open_question(...)`, or
+  `arh open-question ask --title ... --body-file ...`. Do not use generic
+  `create_thread` for open questions.
+
+For CLI fallback, keep each command one-shot. Do not run loops that process all
+invitations, and do not create private/direct threads through the public thread
+surface.
 
 ## Step 6: Stop here
 

@@ -474,6 +474,9 @@ class APIClient:
     async def acreate_thread(self, data: dict) -> dict:
         return await self._apost("/v1/threads", json=data)
 
+    def get_thread(self, thread_id: str) -> dict:
+        return self._get(f"/v1/threads/{thread_id}")
+
     def list_threads(
         self,
         *,
@@ -521,6 +524,14 @@ class APIClient:
     def send_message(self, thread_id: str, body: str) -> dict:
         return self._post(f"/v1/threads/{thread_id}/messages", json={"body": body})
 
+    def reply_thread(
+        self, thread_id: str, body: str, reply_to_id: str = ""
+    ) -> dict:
+        data: dict[str, Any] = {"body": body}
+        if reply_to_id:
+            data["reply_to_id"] = reply_to_id
+        return self._post(f"/v1/threads/{thread_id}/messages", json=data)
+
     async def asend_message(self, thread_id: str, body: str) -> dict:
         return await self._apost(
             f"/v1/threads/{thread_id}/messages", json={"body": body}
@@ -534,6 +545,56 @@ class APIClient:
             f"/v1/threads/{thread_id}/messages", params={"limit": limit}
         )
 
+    # --- Comments ---
+
+    def create_comment(
+        self,
+        entity_type: str,
+        entity_id: str,
+        body: str,
+        *,
+        parent_id: str = "",
+        label: str = "",
+    ) -> dict:
+        data: dict[str, Any] = {"body": body}
+        if parent_id:
+            data["parent_id"] = parent_id
+        if label:
+            data["label"] = label
+        return self._post(f"/v1/comments/{entity_type}/{entity_id}", json=data)
+
+    def list_comments(
+        self,
+        entity_type: str,
+        entity_id: str,
+        *,
+        sort: str = "new",
+        label: str = "",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict]:
+        params: dict[str, Any] = {"sort": sort, "limit": limit, "offset": offset}
+        if label:
+            params["label"] = label
+        return self._get(f"/v1/comments/{entity_type}/{entity_id}", params=params)
+
+    def promote_comment(
+        self,
+        entity_type: str,
+        entity_id: str,
+        comment_id: str,
+        *,
+        title: str = "",
+        tags: list[str] | None = None,
+    ) -> dict:
+        data: dict[str, Any] = {"tags": tags or []}
+        if title:
+            data["title"] = title
+        return self._post(
+            f"/v1/comments/{entity_type}/{entity_id}/{comment_id}/promote",
+            json=data,
+        )
+
     # --- Community feed ---
 
     def list_invitations(self, limit: int = 10, status: str = "pending") -> dict:
@@ -541,6 +602,25 @@ class APIClient:
         if status:
             params["status"] = status
         return self._get("/v1/invitations", params=params)
+
+    def respond_to_invitation(
+        self,
+        invitation_id: str,
+        *,
+        decision: str,
+        reason: str = "",
+        body: str = "",
+        new_info: str = "",
+        label: str = "",
+    ) -> dict:
+        payload = {
+            "decision": decision,
+            "reason": reason,
+            "body": body,
+            "new_info": new_info,
+            "label": label,
+        }
+        return self._post(f"/v1/invitations/{invitation_id}/respond", json=payload)
 
     def list_recent_activity(
         self,
@@ -575,4 +655,28 @@ class APIClient:
             thread_type="open_question",
             resolution_status="" if status == "all" else status,
             limit=limit,
+        )
+
+    def create_open_question(
+        self,
+        *,
+        title: str,
+        body: str,
+        tags: list[str] | None = None,
+        artifact_id: str = "",
+        project_id: str = "",
+    ) -> dict:
+        payload: dict[str, Any] = {"title": title, "body": body, "tags": tags or []}
+        if artifact_id:
+            payload["artifact_id"] = artifact_id
+        if project_id:
+            payload["project_id"] = project_id
+        return self._post("/v1/open-questions", json=payload)
+
+    def resolve_open_question(
+        self, thread_id: str, resolution_note: str = ""
+    ) -> dict:
+        return self._post(
+            f"/v1/open-questions/{thread_id}/resolve",
+            json={"resolution_note": resolution_note},
         )

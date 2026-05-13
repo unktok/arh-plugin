@@ -112,6 +112,111 @@ class _PeerFeedClient:
         ]
 
 
+class _CommunityActionClient:
+    def __init__(self):
+        self.calls = []
+
+    def list_invitations(self, limit=10, status="pending"):
+        self.calls.append(("list_invitations", limit, status))
+        return {"invitations": []}
+
+    def respond_to_invitation(
+        self,
+        invitation_id,
+        *,
+        decision,
+        reason="",
+        body="",
+        new_info="",
+        label="",
+    ):
+        self.calls.append(
+            (
+                "respond_to_invitation",
+                invitation_id,
+                decision,
+                reason,
+                body,
+                new_info,
+                label,
+            )
+        )
+        return {"status": decision}
+
+    def create_comment(
+        self,
+        entity_type,
+        entity_id,
+        body,
+        *,
+        parent_id="",
+        label="",
+    ):
+        self.calls.append(
+            ("create_comment", entity_type, entity_id, body, parent_id, label)
+        )
+        return {"id": "comment-1", "commentable_type": entity_type}
+
+    def list_comments(
+        self,
+        entity_type,
+        entity_id,
+        *,
+        sort="new",
+        label="",
+        limit=20,
+        offset=0,
+    ):
+        self.calls.append(
+            ("list_comments", entity_type, entity_id, sort, label, limit, offset)
+        )
+        return []
+
+    def promote_comment(self, entity_type, entity_id, comment_id, *, title="", tags=None):
+        self.calls.append(
+            ("promote_comment", entity_type, entity_id, comment_id, title, tags)
+        )
+        return {"id": "thread-1"}
+
+    def create_thread(self, data):
+        self.calls.append(("create_thread", data))
+        return {"id": "thread-1", **data}
+
+    def get_thread(self, thread_id):
+        self.calls.append(("get_thread", thread_id))
+        return {"id": thread_id}
+
+    def reply_thread(self, thread_id, body, reply_to_id=""):
+        self.calls.append(("reply_thread", thread_id, body, reply_to_id))
+        return {"id": "message-1"}
+
+    def get_messages(self, thread_id, limit=50):
+        self.calls.append(("get_messages", thread_id, limit))
+        return []
+
+    def list_open_questions(self, *, limit=10, tags=None, status="open"):
+        self.calls.append(("list_open_questions", limit, tags, status))
+        return []
+
+    def create_open_question(
+        self,
+        *,
+        title,
+        body,
+        tags=None,
+        artifact_id="",
+        project_id="",
+    ):
+        self.calls.append(
+            ("create_open_question", title, body, tags, artifact_id, project_id)
+        )
+        return {"id": "question-1"}
+
+    def resolve_open_question(self, thread_id, resolution_note=""):
+        self.calls.append(("resolve_open_question", thread_id, resolution_note))
+        return {"id": thread_id, "resolution_status": "resolved"}
+
+
 def _visibility_args(project_id="project-1", visibility="private", confirm_public=False):
     return type(
         "Args",
@@ -1223,6 +1328,12 @@ def test_cmd_peer_feed_json_uses_profile_tags_and_no_telemetry(monkeypatch, caps
     assert data["filters"]["tags_source"] == "profile"
     assert "api_key_prefix" not in output
     assert "target_agent_id" not in output
+    assert data["invitations"][0]["action"]["kind"] == "respond_invitation"
+    assert data["invitations"][0]["action"]["invitation_id"] == "inv-1"
+    assert data["related_work"][0]["action"]["kind"] == "comment"
+    assert data["related_work"][0]["action"]["entity_type"] == "snapshot"
+    assert data["open_questions"][0]["action"]["kind"] == "reply_thread"
+    assert data["open_questions"][0]["action"]["thread_id"] == "thread-1"
     assert client.calls == [
         ("get_me",),
         ("list_invitations", 7, "pending"),
@@ -1369,6 +1480,240 @@ def test_peer_feed_human_output_strips_terminal_controls(capsys):
     assert "FAKE: resolved" in out
     assert "\nFAKE:" not in out
     assert "?" in out
+
+
+def test_cmd_invitation_list_and_respond(monkeypatch, capsys, tmp_path: Path):
+    client = _CommunityActionClient()
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+
+    list_args = type("Args", (), {"limit": 5, "status": "all"})()
+    cli.cmd_invitation_list(list_args)
+    assert json.loads(capsys.readouterr().out) == {"invitations": []}
+
+    body_file = tmp_path / "body.md"
+    body_file.write_text("This adds a concrete replication concern. " * 4)
+    args = type(
+        "Args",
+        (),
+        {
+            "invitation_id": "inv-1",
+            "decision": "engaged",
+            "reason": "",
+            "reason_file": "",
+            "body": "",
+            "body_file": str(body_file),
+            "new_info": "Adds a concrete replication concern.",
+            "new_info_file": "",
+            "label": "replication",
+        },
+    )()
+
+    cli.cmd_invitation_respond(args)
+
+    json.loads(capsys.readouterr().out)
+    assert client.calls[-1] == (
+        "respond_to_invitation",
+        "inv-1",
+        "engaged",
+        "",
+        body_file.read_text(),
+        "Adds a concrete replication concern.",
+        "replication",
+    )
+
+
+def test_cmd_invitation_respond_validates_decision_requirements(monkeypatch):
+    monkeypatch.setattr(cli, "_get_client", lambda: _CommunityActionClient())
+    engaged_args = type(
+        "Args",
+        (),
+        {
+            "invitation_id": "inv-1",
+            "decision": "engaged",
+            "reason": "",
+            "reason_file": "",
+            "body": "too short",
+            "body_file": "",
+            "new_info": "Adds something.",
+            "new_info_file": "",
+            "label": "",
+        },
+    )()
+    with pytest.raises(SystemExit):
+        cli.cmd_invitation_respond(engaged_args)
+
+    declined_args = type(
+        "Args",
+        (),
+        {
+            "invitation_id": "inv-1",
+            "decision": "declined",
+            "reason": "",
+            "reason_file": "",
+            "body": "",
+            "body_file": "",
+            "new_info": "",
+            "new_info_file": "",
+            "label": "",
+        },
+    )()
+    with pytest.raises(SystemExit):
+        cli.cmd_invitation_respond(declined_args)
+
+
+def test_cmd_comment_commands(monkeypatch, capsys, tmp_path: Path):
+    client = _CommunityActionClient()
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+    body_file = tmp_path / "comment.md"
+    body_file.write_text("Useful comment")
+
+    add_args = type(
+        "Args",
+        (),
+        {
+            "entity_type": "snapshot",
+            "entity_id": "snap-1",
+            "body": "",
+            "body_file": str(body_file),
+            "parent_id": "parent-1",
+            "label": "note",
+        },
+    )()
+    cli.cmd_comment_add(add_args)
+
+    list_args = type(
+        "Args",
+        (),
+        {
+            "entity_type": "research-log",
+            "entity_id": "log-1",
+            "sort": "old",
+            "label": "note",
+            "limit": 3,
+            "offset": 2,
+        },
+    )()
+    cli.cmd_comment_list(list_args)
+
+    promote_args = type(
+        "Args",
+        (),
+        {
+            "entity_type": "project",
+            "entity_id": "project-1",
+            "comment_id": "comment-1",
+            "title": "Discuss this",
+            "tags": "nlp, eval",
+        },
+    )()
+    cli.cmd_comment_promote(promote_args)
+
+    capsys.readouterr()
+    assert client.calls == [
+        ("create_comment", "artifact", "snap-1", "Useful comment", "parent-1", "note"),
+        ("list_comments", "research_log", "log-1", "old", "note", 3, 2),
+        (
+            "promote_comment",
+            "research_project",
+            "project-1",
+            "comment-1",
+            "Discuss this",
+            ["nlp", "eval"],
+        ),
+    ]
+
+
+def test_cmd_thread_and_open_question_commands(monkeypatch, capsys):
+    client = _CommunityActionClient()
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+
+    create_args = type(
+        "Args",
+        (),
+        {
+            "title": "Thread",
+            "thread_type": "discussion",
+            "initial_message": "Initial",
+            "message_file": "",
+            "participants": "alice,bob",
+            "tags": "nlp,eval",
+            "artifact_id": "artifact-1",
+            "project_id": "project-1",
+        },
+    )()
+    cli.cmd_thread_create(create_args)
+
+    cli.cmd_thread_get(type("Args", (), {"thread_id": "thread-1"})())
+    cli.cmd_thread_reply(
+        type(
+            "Args",
+            (),
+            {
+                "thread_id": "thread-1",
+                "body": "Reply",
+                "body_file": "",
+                "reply_to_id": "message-0",
+            },
+        )()
+    )
+    cli.cmd_thread_messages(type("Args", (), {"thread_id": "thread-1", "limit": 7})())
+    cli.cmd_open_question_list(
+        type("Args", (), {"tags": "nlp", "status": "open", "limit": 2})()
+    )
+    cli.cmd_open_question_ask(
+        type(
+            "Args",
+            (),
+            {
+                "title": "Question",
+                "body": "What closes this?",
+                "body_file": "",
+                "tags": "nlp",
+                "artifact_id": "artifact-1",
+                "project_id": "",
+            },
+        )()
+    )
+    cli.cmd_open_question_resolve(
+        type(
+            "Args",
+            (),
+            {
+                "thread_id": "question-1",
+                "resolution_note": "Answered",
+                "resolution_note_file": "",
+            },
+        )()
+    )
+
+    capsys.readouterr()
+    assert client.calls == [
+        (
+            "create_thread",
+            {
+                "title": "Thread",
+                "thread_type": "discussion",
+                "participant_handles": ["alice", "bob"],
+                "tags": ["nlp", "eval"],
+                "initial_message": "Initial",
+                "artifact_id": "artifact-1",
+                "project_id": "project-1",
+            },
+        ),
+        ("get_thread", "thread-1"),
+        ("reply_thread", "thread-1", "Reply", "message-0"),
+        ("get_messages", "thread-1", 7),
+        ("list_open_questions", 2, ["nlp"], "open"),
+        (
+            "create_open_question",
+            "Question",
+            "What closes this?",
+            ["nlp"],
+            "artifact-1",
+            "",
+        ),
+        ("resolve_open_question", "question-1", "Answered"),
+    ]
 
 
 def test_resolve_handoff_runtime_defaults_to_generic(tmp_path: Path, monkeypatch):
