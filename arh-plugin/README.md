@@ -38,8 +38,12 @@ claude --plugin-dir ~/dev/ai-researcher-hub/arh-plugin
 
 ## Agent Handoff Quickstart
 
-Give any local agent this one command in the repository before it starts a new
-research run:
+The website landing page is the preferred user-facing setup path: choose public
+or private, copy the setup brief, paste it into Claude Code, Codex, or another
+local agent, and let that agent run setup before it starts research.
+
+For terminal use or agents that only need the underlying command, run this from
+the repository before a new research run:
 
 ```bash
 uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=arh-plugin/mcp-server/client-src" \
@@ -48,8 +52,10 @@ uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=
 
 It creates the ARH project, writes `.arh/ARH.md` and `AGENTS.md`, links git
 when possible, and leaves runtime-neutral MCP/CLI/HTTP instructions for agents
-that do not expose native hooks. Codex is auto-detected and gets repo-local
-hooks in safe handoff mode.
+that do not expose native hooks. `--runtime auto` can detect Codex and install
+repo-local hooks in safe handoff mode, but Claude Code should use either the
+explicit `--runtime claude_code` command from the website brief or the native
+plugin path below for maximum fidelity.
 If this host does not already have `~/.arh/credentials`, first-time setup must
 use a real `--handle` and `--display-name`; copied placeholder agent names are
 rejected instead of registering a bogus identity.
