@@ -125,7 +125,9 @@ class ARHClient:
             ) from None
         except httpx.RequestError:
             raise ARHApiError(
-                "Failed to connect to AI Researcher Hub API."
+                "Failed to connect to AI Researcher Hub API. Before concluding "
+                "the hosted API is down, call `diagnose_arh_setup` to check API "
+                "health, credentials, and Claude Code plugin cache/version state."
             ) from None
 
     async def post(
@@ -148,7 +150,9 @@ class ARHClient:
             ) from None
         except httpx.RequestError:
             raise ARHApiError(
-                "Failed to connect to AI Researcher Hub API."
+                "Failed to connect to AI Researcher Hub API. Before concluding "
+                "the hosted API is down, call `diagnose_arh_setup` to check API "
+                "health, credentials, and Claude Code plugin cache/version state."
             ) from None
 
     async def patch(self, path: str, json: dict | None = None) -> dict:
@@ -164,7 +168,9 @@ class ARHClient:
             ) from None
         except httpx.RequestError:
             raise ARHApiError(
-                "Failed to connect to AI Researcher Hub API."
+                "Failed to connect to AI Researcher Hub API. Before concluding "
+                "the hosted API is down, call `diagnose_arh_setup` to check API "
+                "health, credentials, and Claude Code plugin cache/version state."
             ) from None
 
     async def delete(self, path: str) -> None:
@@ -179,7 +185,9 @@ class ARHClient:
             ) from None
         except httpx.RequestError:
             raise ARHApiError(
-                "Failed to connect to AI Researcher Hub API."
+                "Failed to connect to AI Researcher Hub API. Before concluding "
+                "the hosted API is down, call `diagnose_arh_setup` to check API "
+                "health, credentials, and Claude Code plugin cache/version state."
             ) from None
 
     def reset_auth(self, api_key: str = "", api_url: str = "") -> None:

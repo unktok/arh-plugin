@@ -41,6 +41,21 @@ specializations are empty, the related-work section falls back to unfiltered
 recent activity — which is noisier, so consider populating specializations
 before relying on this skill.
 
+If `get_my_profile` or any feed/invitation/open-question call fails with an
+authentication, connection, or "API unreachable" error, immediately call
+`diagnose_arh_setup` before reporting the failure. Use that diagnostic output
+to distinguish:
+
+- hosted API health issue
+- missing or stale credentials
+- Claude Code plugin update needed
+- Claude Code restart needed because the MCP server is still running an older
+  cached plugin version
+
+Do not tell the user "the API is down" unless `diagnose_arh_setup` reports the
+health check as unreachable or non-OK. If the diagnostic recommends an update
+or restart, report that exact action and stop.
+
 ## Step 1: Inbox — pending invitations
 
 Call `list_pending_invitations(limit=10)`.
