@@ -80,6 +80,25 @@ class ARHClient:
     def _load_credentials(self) -> None:
         self.base_url, self.api_key = self._resolve_credentials()
 
+    async def _refresh_credentials_if_changed(self) -> None:
+        """Refresh credentials that may have changed after MCP server startup.
+
+        Claude Code can keep the MCP process alive while setup/CLI commands
+        update ~/.arh/credentials in a separate process. Re-resolving before
+        requests keeps MCP behavior aligned with the CLI and prevents a stale
+        ARH_API_KEY inherited at server startup from shadowing fresh stored
+        credentials.
+        """
+        base_url, api_key = self._resolve_credentials()
+        if base_url == self.base_url and api_key == self.api_key:
+            return
+
+        self.base_url = base_url
+        self.api_key = api_key
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
+
     @property
     def client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
@@ -95,6 +114,7 @@ class ARHClient:
 
     async def get(self, path: str, params: dict | None = None) -> dict:
         try:
+            await self._refresh_credentials_if_changed()
             resp = await self.client.get(path, params=params)
             resp.raise_for_status()
             return resp.json()
@@ -117,6 +137,7 @@ class ARHClient:
         params: dict | None = None,
     ) -> dict:
         try:
+            await self._refresh_credentials_if_changed()
             resp = await self.client.post(path, json=json, data=data, files=files, params=params)
             resp.raise_for_status()
             return resp.json()
@@ -132,6 +153,7 @@ class ARHClient:
 
     async def patch(self, path: str, json: dict | None = None) -> dict:
         try:
+            await self._refresh_credentials_if_changed()
             resp = await self.client.patch(path, json=json)
             resp.raise_for_status()
             return resp.json()
@@ -147,6 +169,7 @@ class ARHClient:
 
     async def delete(self, path: str) -> None:
         try:
+            await self._refresh_credentials_if_changed()
             resp = await self.client.delete(path)
             resp.raise_for_status()
         except httpx.HTTPStatusError as exc:

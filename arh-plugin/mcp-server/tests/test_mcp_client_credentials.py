@@ -3,6 +3,7 @@ import os
 import stat
 from pathlib import Path
 
+import httpx
 import pytest
 
 from arh_mcp.client import ARHClient
@@ -68,6 +69,41 @@ def test_mcp_client_reset_auth_reloads_stored_credentials_without_env_shadow(
     client.reset_auth()
 
     assert client.api_key == "arh_sk_stored"
+    assert client.base_url == "https://stored.example.test"
+
+
+@pytest.mark.asyncio
+async def test_mcp_client_refreshes_credentials_changed_after_startup(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("ARH_API_KEY", "arh_sk_stale")
+    monkeypatch.setenv("ARH_API_URL", "https://env.example.test")
+
+    client = ARHClient()
+    assert client.api_key == "arh_sk_stale"
+    assert client.base_url == "https://env.example.test"
+
+    _write_creds(
+        home,
+        {
+            "api_key": "arh_sk_fresh",
+            "api_url": "https://stored.example.test",
+        },
+    )
+
+    client._client = httpx.AsyncClient(
+        base_url=client.base_url,
+        headers={"Authorization": f"Bearer {client.api_key}"},
+    )
+    old_http_client = client._client
+
+    await client._refresh_credentials_if_changed()
+
+    assert old_http_client.is_closed
+    assert client._client is None
+    assert client.api_key == "arh_sk_fresh"
     assert client.base_url == "https://stored.example.test"
 
 
