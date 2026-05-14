@@ -315,6 +315,49 @@ def test_load_arh_env_key_only_credentials_use_default_url_not_ambient_url(
     assert parsed["ARH_API_URL"] == "https://api.airesearcherhub.com"
 
 
+def test_load_arh_env_drops_ambient_project_context_without_local_setup(
+    tmp_path: Path,
+) -> None:
+    """Community mode can run from an untracked directory. A stale shell-level
+    ARH_PROJECT_ID must not make the Claude hook report Stop events against an
+    unrelated tracking project.
+    """
+    runner = (
+        "import importlib.util, json, os, sys\n"
+        f"sys.path.insert(0, os.path.dirname(r'{HOOK_HANDLER}'))\n"
+        f"spec = importlib.util.spec_from_file_location('hh', r'{HOOK_HANDLER}')\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(mod)\n"
+        "mod.load_arh_env()\n"
+        "print(json.dumps({'ARH_PROJECT_ID': os.environ.get('ARH_PROJECT_ID', ''),"
+        "                   'ARH_TRACE_ID': os.environ.get('ARH_TRACE_ID', '')}))\n"
+    )
+
+    fake_home = tmp_path / "fake-home"
+    fake_home.mkdir()
+    (fake_home / ".arh").mkdir()
+    (fake_home / ".arh" / "credentials").write_text(
+        json.dumps({"api_key": "arh_sk_fresh"})
+    )
+    env = os.environ.copy()
+    env["HOME"] = str(fake_home)
+    env["ARH_PROJECT_ID"] = "11111111-1111-1111-1111-111111111111"
+    env["ARH_TRACE_ID"] = "22222222-2222-2222-2222-222222222222"
+
+    result = subprocess.run(
+        [sys.executable, "-c", runner],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
+    parsed = json.loads(result.stdout.strip().splitlines()[-1])
+    assert parsed == {"ARH_PROJECT_ID": "", "ARH_TRACE_ID": ""}
+
+
 @pytest.fixture(autouse=True)
 def _hook_handler_must_exist():
     """Sanity check — fail loudly if the hook-handler script is missing."""

@@ -46,7 +46,10 @@ def load_arh_env():
       2. Project `.arh/.env` → ARH_PROJECT_ID, ARH_TRACE_ID, and ARH_API_URL
          only without a stored API key. ARH_API_KEY in this file is IGNORED
          and a deprecation warning is printed to stderr.
-      3. Existing shell env vars (preserved when no source above sets the key)
+      3. Existing shell ARH_API_KEY / ARH_API_URL env vars only when no stored
+         credential exists. Ambient ARH_PROJECT_ID / ARH_TRACE_ID are ignored
+         by this Claude hook; tracking must be scoped by the current cwd's
+         `.arh` files so project context does not leak into unrelated dirs.
     """
     ARH_PROJECT_KEYS = ("ARH_API_URL", "ARH_PROJECT_ID", "ARH_TRACE_ID")
 
@@ -106,6 +109,11 @@ def load_arh_env():
 
     for k, v in resolved.items():
         os.environ[k] = v
+
+    if "ARH_PROJECT_ID" not in resolved:
+        os.environ.pop("ARH_PROJECT_ID", None)
+    if "ARH_TRACE_ID" not in resolved:
+        os.environ.pop("ARH_TRACE_ID", None)
 
 
 def _arh_settings_path(cwd: str) -> str:
