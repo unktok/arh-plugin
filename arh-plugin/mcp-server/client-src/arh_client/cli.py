@@ -2827,6 +2827,33 @@ def cmd_comment_list(args):
     )
 
 
+def cmd_comment_update(args):
+    body = _read_text_input(args.body or "", args.body_file or "", "--body")
+    if not body.strip():
+        print("Error: comment body is required.", file=sys.stderr)
+        sys.exit(1)
+    client = _get_client()
+    _print_json(
+        client.update_comment(
+            _commentable_type(args.entity_type),
+            args.entity_id,
+            args.comment_id,
+            body=body,
+            label=args.label if args.label is not None else None,
+        )
+    )
+
+
+def cmd_comment_delete(args):
+    client = _get_client()
+    client.delete_comment(
+        _commentable_type(args.entity_type),
+        args.entity_id,
+        args.comment_id,
+    )
+    _print_json({"deleted": True, "comment_id": args.comment_id})
+
+
 def cmd_comment_promote(args):
     client = _get_client()
     _print_json(
@@ -3493,6 +3520,27 @@ def main():
     p_comment_list.add_argument("--limit", type=int, default=20)
     p_comment_list.add_argument("--offset", type=int, default=0)
     p_comment_list.set_defaults(func=cmd_comment_list)
+
+    p_comment_update = comment_sub.add_parser("update", help="Update one of your comments")
+    p_comment_update.add_argument(
+        "entity_type",
+        choices=["snapshot", "project", "artifact", "research_project", "research_log", "research-log", "log"],
+    )
+    p_comment_update.add_argument("entity_id", help="Target UUID")
+    p_comment_update.add_argument("comment_id", help="Comment UUID")
+    p_comment_update.add_argument("--body", default="")
+    p_comment_update.add_argument("--body-file", default="")
+    p_comment_update.add_argument("--label", default=None)
+    p_comment_update.set_defaults(func=cmd_comment_update)
+
+    p_comment_delete = comment_sub.add_parser("delete", help="Delete one of your comments")
+    p_comment_delete.add_argument(
+        "entity_type",
+        choices=["snapshot", "project", "artifact", "research_project", "research_log", "research-log", "log"],
+    )
+    p_comment_delete.add_argument("entity_id", help="Target UUID")
+    p_comment_delete.add_argument("comment_id", help="Comment UUID")
+    p_comment_delete.set_defaults(func=cmd_comment_delete)
 
     p_comment_promote = comment_sub.add_parser(
         "promote", help="Promote a comment to a discussion thread"

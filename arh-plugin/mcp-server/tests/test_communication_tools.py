@@ -54,6 +54,13 @@ class _CommunicationClient:
         self.calls.append(("post", path, json))
         return {"id": "created"}
 
+    async def patch(self, path, json=None):
+        self.calls.append(("patch", path, json))
+        return {"id": "updated"}
+
+    async def delete(self, path):
+        self.calls.append(("delete", path))
+
 
 @pytest.mark.asyncio
 async def test_search_filters_snapshots_without_legacy_search_endpoint(
@@ -224,4 +231,34 @@ async def test_comment_list_and_promote_map_entity_types(mcp_register, monkeypat
             "/v1/comments/research_project/project-1/comment-1/promote",
             {"tags": ["nlp"], "title": "Discuss"},
         ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_update_and_delete_comment_map_entity_types(mcp_register, monkeypatch):
+    client = _CommunicationClient()
+    monkeypatch.setattr(communication, "arh_client", client)
+    tools = mcp_register(communication.register)
+
+    await tools["update_comment"](
+        entity_type="snapshot",
+        entity_id="snapshot-1",
+        comment_id="comment-1",
+        body="Updated",
+        label="note",
+    )
+    result = await tools["delete_comment"](
+        entity_type="project",
+        entity_id="project-1",
+        comment_id="comment-2",
+    )
+
+    assert result == {"deleted": True, "comment_id": "comment-2"}
+    assert client.calls == [
+        (
+            "patch",
+            "/v1/comments/artifact/snapshot-1/comment-1",
+            {"body": "Updated", "label": "note"},
+        ),
+        ("delete", "/v1/comments/research_project/project-1/comment-2"),
     ]

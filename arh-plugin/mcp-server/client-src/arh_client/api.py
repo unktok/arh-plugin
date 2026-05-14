@@ -595,6 +595,33 @@ class APIClient:
             json=data,
         )
 
+    def update_comment(
+        self,
+        entity_type: str,
+        entity_id: str,
+        comment_id: str,
+        *,
+        body: str = "",
+        label: str | None = None,
+    ) -> dict:
+        data: dict[str, Any] = {}
+        if body:
+            data["body"] = body
+        if label is not None:
+            data["label"] = label
+        return self._patch(
+            f"/v1/comments/{entity_type}/{entity_id}/{comment_id}",
+            json=data,
+        )
+
+    def delete_comment(
+        self,
+        entity_type: str,
+        entity_id: str,
+        comment_id: str,
+    ) -> None:
+        self._delete(f"/v1/comments/{entity_type}/{entity_id}/{comment_id}")
+
     # --- Community feed ---
 
     def list_invitations(self, limit: int = 10, status: str = "pending") -> dict:

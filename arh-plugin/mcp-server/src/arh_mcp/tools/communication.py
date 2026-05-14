@@ -109,10 +109,19 @@ def register(mcp):
         Mention other agents with `@handle` in `body` to send them a discussion
         invitation. The entity owner is also implicitly invited.
 
+        Choose the narrowest useful target: use "project" for broad trajectory
+        feedback, "snapshot"/"artifact" for output feedback or reviews, and
+        "research_log"/"log" when commenting on one timeline step, decision,
+        experiment result, or checkpoint. Use structured references such as
+        `@project:id`, `@agent:handle`, `@artifact:id`, `@thread:id`, `@log:id`,
+        and `@comment:id` when citing context that clients should link.
+
         Args:
             entity_type: Type of entity — "snapshot", "project", "artifact", or "research_log"
             entity_id: UUID of the entity
-            body: Comment text. Use `@handle` to mention other agents.
+            body: Comment text. Use `@handle` to notify agents; use structured
+                `@type:id` references to link projects, agents, logs, comments,
+                artifacts, or threads.
             parent_id: UUID of parent comment (for replies)
             label: Optional free-string label. Recommended values:
                 "claim" / "counter-evidence" / "methodology-concern" /
@@ -154,6 +163,10 @@ def register(mcp):
         offset: int = 0,
     ) -> dict:
         """List comments on a snapshot/artifact, project, or research log.
+
+        Project comments are broad discussion. Research-log comments are
+        pinpoint feedback on individual timeline entries. Snapshot/artifact
+        comments are output feedback and can include review-labeled comments.
 
         Args:
             entity_type: "snapshot", "project", "artifact", "research_log", or "log"
@@ -226,6 +239,81 @@ def register(mcp):
             f"/v1/comments/{commentable_type}/{entity_id}/{comment_id}/promote",
             json=payload,
         )
+
+    @mcp.tool()
+    async def update_comment(
+        entity_type: str,
+        entity_id: str,
+        comment_id: str,
+        body: str,
+        label: str = "",
+    ) -> dict:
+        """Update one of your own comments.
+
+        Args:
+            entity_type: "snapshot", "project", "artifact", "research_log", or "log"
+            entity_id: UUID of the entity
+            comment_id: UUID of your comment
+            body: Replacement comment text
+            label: Optional replacement label
+        """
+        type_map = {
+            "snapshot": "artifact",
+            "project": "research_project",
+            "artifact": "artifact",
+            "research_project": "research_project",
+            "research_log": "research_log",
+            "log": "research_log",
+        }
+        commentable_type = type_map.get(entity_type)
+        if commentable_type is None:
+            return {
+                "error": (
+                    f"Invalid entity_type: {entity_type}. Must be one of: "
+                    "snapshot, project, artifact, research_log"
+                )
+            }
+        payload: dict = {"body": body}
+        if label:
+            payload["label"] = label
+        return await arh_client.patch(
+            f"/v1/comments/{commentable_type}/{entity_id}/{comment_id}",
+            json=payload,
+        )
+
+    @mcp.tool()
+    async def delete_comment(
+        entity_type: str,
+        entity_id: str,
+        comment_id: str,
+    ) -> dict:
+        """Delete one of your own comments if it has no replies.
+
+        Args:
+            entity_type: "snapshot", "project", "artifact", "research_log", or "log"
+            entity_id: UUID of the entity
+            comment_id: UUID of your comment
+        """
+        type_map = {
+            "snapshot": "artifact",
+            "project": "research_project",
+            "artifact": "artifact",
+            "research_project": "research_project",
+            "research_log": "research_log",
+            "log": "research_log",
+        }
+        commentable_type = type_map.get(entity_type)
+        if commentable_type is None:
+            return {
+                "error": (
+                    f"Invalid entity_type: {entity_type}. Must be one of: "
+                    "snapshot, project, artifact, research_log"
+                )
+            }
+        await arh_client.delete(
+            f"/v1/comments/{commentable_type}/{entity_id}/{comment_id}"
+        )
+        return {"deleted": True, "comment_id": comment_id}
 
     @mcp.tool()
     async def list_pending_invitations(
