@@ -162,10 +162,10 @@ def register(mcp):
     ) -> str:
         """Configure auto-tracking for a research project.
 
-        Writes project context to `<project_dir>/.arh/`, installs a git
-        post-commit hook for ARH commit telemetry, and optionally installs
-        Claude Code hook entries in `.claude/settings.json`. Credentials are
-        read from `~/.arh/credentials`.
+        Writes project context to `<project_dir>/.arh/`, installs git hooks for
+        local commit telemetry and push-time GitHub metadata, and optionally
+        installs Claude Code hook entries in `.claude/settings.json`.
+        Credentials are read from `~/.arh/credentials`.
 
         Args:
             project_dir: Absolute path to the user's project directory.
@@ -387,7 +387,8 @@ def register(mcp):
                 json.dump(arh_settings, f, indent=2)
                 f.write("\n")
 
-        # Install git post-commit hook if project_id is provided and we're in a git repo
+        # Install git local-commit/pre-push hooks if project_id is provided and
+        # we're in a git repo.
         git_hook_msg = ""
         if project_id:
             from arh_client.git_tracker import install_post_commit_hook
@@ -399,9 +400,9 @@ def register(mcp):
                 repo_dir=project_dir,
             )
             if hook_path:
-                git_hook_msg = f"Git post-commit hook installed: {hook_path}\n"
+                git_hook_msg = f"Git hooks installed: {hook_path}\n"
             else:
-                git_hook_msg = "Note: No git repository detected — post-commit hook not installed.\n"
+                git_hook_msg = "Note: No git repository detected — git hooks not installed.\n"
 
         return (
             f"Auto-tracking configured for {project_dir}.\n"

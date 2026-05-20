@@ -292,10 +292,13 @@ class APIClient:
         project_id: str,
         remote_url: str,
         branch: str = "",
+        force: bool = False,
     ) -> dict:
         payload: dict[str, Any] = {"remote_url": remote_url}
         if branch:
             payload["branch"] = branch
+        if force:
+            payload["force"] = True
         return self._post(f"/v1/research/projects/{project_id}/link-repo", json=payload)
 
     async def alink_repository(
@@ -303,10 +306,13 @@ class APIClient:
         project_id: str,
         remote_url: str,
         branch: str = "",
+        force: bool = False,
     ) -> dict:
         payload: dict[str, Any] = {"remote_url": remote_url}
         if branch:
             payload["branch"] = branch
+        if force:
+            payload["force"] = True
         return await self._apost(
             f"/v1/research/projects/{project_id}/link-repo", json=payload
         )

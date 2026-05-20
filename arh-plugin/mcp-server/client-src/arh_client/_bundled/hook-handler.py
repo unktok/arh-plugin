@@ -262,6 +262,21 @@ def _detect_git_info(cwd: str) -> tuple[str, str]:
 
     try:
         result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return "", ""
+        if os.path.realpath(result.stdout.strip()) != os.path.realpath(cwd):
+            return "", ""
+    except (OSError, subprocess.TimeoutExpired):
+        return "", ""
+
+    try:
+        result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
             cwd=cwd,
             capture_output=True,
@@ -564,9 +579,9 @@ def build_payload(event_type: str, event_data: dict) -> dict | None:
         # Final auto-checkpoint flush — captures any work that didn't make it
         # into a PostToolUse-triggered checkpoint. Bypasses the 30-second
         # throttle because end-of-session is the last chance to record state.
-        # Note: when `.arh/settings.json` has `auto_commit=true`, the legacy
-        # `_auto_commit_and_push` path may have already committed everything to
-        # the active branch by the time we get here — in that case
+        # Note: when `.arh/settings.json` has `auto_commit=true`, the
+        # auto-commit path may have already committed everything locally by the
+        # time we get here — in that case
         # `_git_has_changes` returns False and this flush no-ops. PostToolUse
         # captures the granular per-tool history in real usage.
         if session_id:

@@ -239,6 +239,9 @@ def redact_text(value: str) -> str:
 
 
 def detect_git_info(cwd: Path) -> tuple[str, str]:
+    root_rc, root, _ = git(cwd, ["rev-parse", "--show-toplevel"])
+    if root_rc != 0 or Path(root.strip()).resolve() != cwd.resolve():
+        return "", ""
     remote = git(cwd, ["remote", "get-url", "origin"])[1].strip()
     branch = git(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])[1].strip()
     return remote, branch
@@ -417,20 +420,9 @@ def auto_commit_and_push(
         "sha": sha if sha_rc == 0 else "",
         "message": message,
         "push_failed": False,
+        "push_skipped": True,
+        "push_reason": "local_first",
     }
-
-    remote_rc, remote, _ = git(cwd, ["remote"])
-    if remote_rc != 0 or not remote.strip():
-        result["push_skipped"] = True
-        result["push_reason"] = "no_remote"
-        return result
-
-    push = subprocess.run(["git", "push"], cwd=str(cwd), capture_output=True, text=True)
-    if push.returncode != 0:
-        result["push_failed"] = True
-        result["push_error"] = truncate(push.stderr or push.stdout)
-    else:
-        result["pushed"] = True
     return result
 
 

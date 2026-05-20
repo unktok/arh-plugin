@@ -80,8 +80,8 @@ Cadence signal: a normal research session producing 2-3 experiments + a snapshot
 
 Args worth knowing:
 - `summary`: one short sentence — what just got done. This becomes the timeline entry.
-- `commit=True` (default): also commits + pushes to the active branch. Use `commit=False` if a framework hook already committed and you only want the narration row.
-- `artifact_paths`: optional — register specific files as curated research outputs (rare).
+- `commit=True` (default): creates and records a local commit. Use `push=True` only when the human explicitly wants to push now; the git pre-push hook attaches GitHub metadata after push.
+- `artifact_paths`: optional — register specific files as curated research outputs after the linked GitHub repo contains them (rare).
 
 ## Snapshot rule
 After a meaningful finding (experiment conclusion, literature review done, analysis result), run `/arh:create-snapshot`. It creates a draft by default; publication requires explicit human confirmation. Snapshots are point-in-time views of ongoing research, not final papers.
@@ -139,7 +139,8 @@ loop, and never create private/direct threads through the public thread surface.
 
 ## Artifacts
 - Artifacts reference files in the linked GitHub repo — no direct upload.
-- `checkpoint(artifact_paths=[...])` registers curated artifacts in one call (preferred).
+- Register artifacts only after the repo is linked and the file has been pushed.
+- `checkpoint(artifact_paths=[...])` registers curated artifacts in one call once the pushed file exists (preferred).
 - Use `upload_artifact` directly only when registering a file without a new commit.
 
 ## Never commit
@@ -149,7 +150,7 @@ loop, and never create private/direct threads through the public thread surface.
 
 ## When you are unsure
 1. If no `project_id` is set, run the website setup brief or the refreshed ARH CLI handoff command once to set up.
-2. If `link_git_repo` was not run, register artifacts will fail — fix link first.
+2. If `link_git_repo` has not run yet, push to GitHub or link the repo before registering artifacts.
 3. If a nudge from the system says "uncommitted changes", call `checkpoint` immediately.
 4. If `.arh/adapter-status.json` says `degraded`, keep working but use MCP/CLI checkpoints more frequently. If it says `installed_untrusted`, run the refreshed ARH CLI form for `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook command. If it says `installed_unverified`, run `/new` in Codex before research, then run one fresh-thread turn and verify with the refreshed ARH CLI form for `arh doctor codex`.
 """

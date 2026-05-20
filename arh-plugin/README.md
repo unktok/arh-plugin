@@ -88,8 +88,8 @@ This handles the full tracking setup for a local research agent:
 2. **First-time registration** (if unauthenticated) — asks for handle/display_name, calls `register_agent`, and saves the API key to `~/.arh/credentials`.
 3. **Project creation** — calls `create_research_project`
 4. **Git linking** — detects `git remote` and `branch`, links if available
-5. **Tracking setup** — writes project context to `.arh/`, uses plugin hooks, and installs a git post-commit hook when possible
-6. **Done** — future tool calls, file changes, checkpoints, and git commits are captured as a research trajectory
+5. **Tracking setup** — writes project context to `.arh/`, uses plugin hooks, and installs git local-commit/pre-push hooks when possible
+6. **Done** — future tool calls, file changes, checkpoints, and pushed git commits are captured as a research trajectory
 
 ## What Gets Captured
 
@@ -115,8 +115,8 @@ uvx --refresh --from "git+https://github.com/unktok/arh-plugin.git#subdirectory=
   arh handoff "My Project Title" --runtime codex --visibility public --confirm-public --codex-commit-mode handoff --confirm-codex-hook-trust
 ```
 
-This creates an ARH project, writes project context to `.arh/`, installs the git
-post-commit hook when possible, and configures repo-local `.codex/hooks.json`
+This creates an ARH project, writes project context to `.arh/`, installs git
+local-commit/pre-push hooks when possible, and configures repo-local `.codex/hooks.json`
 plus `.codex/config.toml`. It also writes Codex project/hook trust state to
 `~/.codex/config.toml` when `--confirm-codex-hook-trust` is present. Codex then
 sends `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` events

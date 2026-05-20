@@ -1110,7 +1110,7 @@ def _try_auto_create_github_repo(api_url: str, api_key: str) -> tuple[str, str, 
     """Mirror `init-research` SKILL.md Step 4 Case B.
 
     When the project is not yet linked to a remote, try to git init / commit
-    / `gh repo create --private --source=. --push`. Returns
+    / `gh repo create --private --source=. --push` when explicitly requested. Returns
     `(remote_url, branch, created)` where `created=True` means we ran the gh
     command. On any failure (no gh CLI, gh not authenticated, name collision,
     network error) returns `("", "", False)` and prints a warning — never
@@ -1220,9 +1220,41 @@ def _try_auto_create_github_repo(api_url: str, api_key: str) -> tuple[str, str, 
     )
 
 
-def _maybe_commit_workspace_structure(actions: dict, has_remote: bool) -> bool:
-    """Commit and push the workspace scaffolding when this run actually
-    created any of it. Mirrors `init-research` SKILL.md Step 5.5.6.
+def _ensure_local_git_repo(cwd: str) -> bool:
+    """Ensure cwd is its own git repo, refusing unrelated parent repos."""
+    inside = subprocess.run(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if inside.returncode == 0 and inside.stdout.strip() == "true":
+        root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if root.returncode == 0 and os.path.realpath(root.stdout.strip()) == os.path.realpath(cwd):
+            return True
+        # Parent repositories are unrelated; initialize a nested project repo.
+    init = subprocess.run(
+        ["git", "init"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if init.returncode != 0:
+        print(f"Warning: git init failed: {init.stderr.strip()}", file=sys.stderr)
+        return False
+    return True
+
+
+def _maybe_commit_workspace_structure(actions: dict) -> bool:
+    """Commit the workspace scaffolding locally when this run created it.
 
     Returns True if a commit was created.
     """
@@ -1286,15 +1318,6 @@ def _maybe_commit_workspace_structure(actions: dict, has_remote: bool) -> bool:
             file=sys.stderr,
         )
         return False
-    if has_remote:
-        push = subprocess.run(
-            ["git", "push"], cwd=cwd, capture_output=True, text=True, timeout=60
-        )
-        if push.returncode != 0:
-            print(
-                f"Warning: workspace commit created but push failed: {push.stderr.strip()}",
-                file=sys.stderr,
-            )
     return True
 
 
@@ -1321,6 +1344,10 @@ def _run_research_setup(args):
         git_info = detect_git_info(os.getcwd())
         if git_info:
             git_remote, git_branch = git_info
+        elif _ensure_local_git_repo(os.getcwd()):
+            git_info = detect_git_info(os.getcwd())
+            if git_info:
+                git_remote, git_branch = git_info
 
     # 2. Create or reuse research project
     project_id = getattr(args, "project_id", "") or ""
@@ -1379,7 +1406,7 @@ def _run_research_setup(args):
 
     # 2.5. Initialize the research workspace (.arh/ARH.md, scaffolding dirs,
     # CLAUDE.md block, .gitignore). Mirrors init-research SKILL.md Step 5.5.
-    # Run BEFORE the post-commit hook installer / structure commit so the
+    # Run BEFORE the git hook installer / structure commit so the
     # files exist when we stage them. Idempotent.
     workspace_actions: dict = {}
     try:
@@ -1387,13 +1414,13 @@ def _run_research_setup(args):
     except Exception as e:
         print(f"Warning: failed to initialize research workspace: {e}", file=sys.stderr)
 
-    # 3. Link git repository, or auto-create one via gh when none exists
-    # (mirrors init-research SKILL.md Step 4 Case B). `--no-github` skips the
-    # auto-create branch but still links if a remote already exists.
+    # 3. Link an existing git repository, or explicitly auto-create one via gh.
+    # Local-first is the default: no GitHub repository is created or pushed
+    # unless the caller opts in with --create-github.
     repo_linked = False
     repo_created = False
     if not args.no_git:
-        if not git_remote and not getattr(args, "no_github", False):
+        if not git_remote and getattr(args, "create_github", False):
             new_remote, new_branch, repo_created = _try_auto_create_github_repo(
                 api_url, api_key
             )
@@ -1410,23 +1437,21 @@ def _run_research_setup(args):
             except Exception as e:
                 print(f"Warning: failed to link repository: {e}", file=sys.stderr)
 
-    # 4. Install post-commit hook
+    # 4. Install push-time git tracking hook.
     hook_installed = False
-    if repo_linked:
+    if not args.no_git:
         try:
             hook_path = install_post_commit_hook(project_id, api_url, api_key)
             if hook_path:
                 hook_installed = True
-                print(f"Post-commit hook installed: {hook_path}", file=sys.stderr)
+                print(f"Git hooks installed: {hook_path}", file=sys.stderr)
         except Exception as e:
-            print(f"Warning: failed to install post-commit hook: {e}", file=sys.stderr)
+            print(f"Warning: failed to install git hooks: {e}", file=sys.stderr)
 
-    # 4.5. Commit and push the workspace structure if we created it during
-    # this run (mirrors init-research SKILL.md Step 5.5.5). Soft-fails if no
-    # remote / push fails — the local files are still on disk.
-    structure_committed = _maybe_commit_workspace_structure(
-        workspace_actions, has_remote=repo_linked
-    )
+    # 4.5. Commit the workspace structure locally if we created it during this run.
+    structure_committed = False
+    if not args.no_git:
+        structure_committed = _maybe_commit_workspace_structure(workspace_actions)
 
     # 5. Watch directory info
     if args.watch_dir:
@@ -1499,6 +1524,18 @@ def _print_research_setup_summary(args, project_id: str, summary: dict):
         suffix = " (auto-created)" if summary.get("repo_created") else ""
         print(f"  Git Repo:   {summary.get('git_remote')}{suffix}", file=sys.stderr)
         print(f"  Branch:     {summary.get('git_branch')}", file=sys.stderr)
+    elif getattr(args, "no_git", False):
+        print("  Git Repo:   disabled (--no-git)", file=sys.stderr)
+    elif summary.get("git_hook"):
+        print(
+            "  Git Repo:   local commits tracked; GitHub will link after first push",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "  Git Repo:   not linked; no local git repository detected",
+            file=sys.stderr,
+        )
     if summary.get("workspace_initialized"):
         commit_suffix = (
             " (committed)" if summary.get("structure_committed") else " (uncommitted)"
@@ -3089,7 +3126,7 @@ def _scan_staged_secrets_cli(project_dir: str) -> dict:
     if not binary:
         return {
             "blocked": True,
-            "error": "gitleaks is required before ARH checkpoint can commit and push.",
+            "error": "gitleaks is required before ARH checkpoint can commit.",
             "fix": (
                 "Install gitleaks, then rerun the checkpoint command. If `arh` "
                 f"is not on PATH, use `{PUBLIC_ARH_CLI_PREFIX} checkpoint ...`."
@@ -3138,7 +3175,7 @@ def _scan_staged_secrets_cli(project_dir: str) -> dict:
     }
 
 
-def _checkpoint_git_commit(project_dir: str, message: str, push: bool = True) -> dict:
+def _checkpoint_git_commit(project_dir: str, message: str, push: bool = False) -> dict:
     rc, out, _ = _run_git(project_dir, ["rev-parse", "--is-inside-work-tree"], timeout=10)
     if rc != 0 or out.strip() != "true":
         return {
@@ -3221,7 +3258,10 @@ def cmd_checkpoint(args):
     files_changed: list[str] = []
 
     if not args.no_commit:
-        git_result = _checkpoint_git_commit(project_dir, commit_message, push=not args.no_push)
+        push = bool(getattr(args, "push", False) and not getattr(args, "no_push", False))
+        git_result = _checkpoint_git_commit(
+            project_dir, commit_message, push=push
+        )
         if git_result.get("error"):
             if git_result.get("reason") == "no_changes":
                 warnings.append("No uncommitted changes; recorded a log-only checkpoint.")
@@ -3727,7 +3767,12 @@ def main():
         "--no-commit", action="store_true", help="Only write the ARH log row"
     )
     p_checkpoint.add_argument(
-        "--no-push", action="store_true", help="Create the commit but skip git push"
+        "--push", action="store_true", help="Push after creating the checkpoint commit"
+    )
+    p_checkpoint.add_argument(
+        "--no-push",
+        action="store_true",
+        help="Deprecated compatibility flag; default already skips git push and this overrides --push",
     )
     p_checkpoint.set_defaults(func=cmd_checkpoint)
 
@@ -3841,7 +3886,12 @@ def main():
         parser.add_argument(
             "--no-github",
             action="store_true",
-            help="Skip auto-creating a private GitHub repo when no remote is configured.",
+            help="Deprecated compatibility flag; GitHub auto-creation is off by default.",
+        )
+        parser.add_argument(
+            "--create-github",
+            action="store_true",
+            help="Opt in to auto-creating a private GitHub repo and pushing the initial branch.",
         )
         parser.add_argument(
             "--handle",

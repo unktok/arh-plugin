@@ -4,6 +4,7 @@ import json
 import os
 import stat
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -34,6 +35,20 @@ class _LogClient:
 
     def add_log(self, project_id, data):
         self.calls.append((project_id, data))
+        return {"id": "log-1", "project_id": project_id, **data}
+
+
+class _CheckpointClient:
+    def __init__(self):
+        self.record_commit_calls = []
+        self.log_calls = []
+
+    def record_commit(self, *args, **kwargs):
+        self.record_commit_calls.append((args, kwargs))
+        return {"id": "commit-1"}
+
+    def add_log(self, project_id, data):
+        self.log_calls.append((project_id, data))
         return {"id": "log-1", "project_id": project_id, **data}
 
 
@@ -683,6 +698,93 @@ def test_commit_payload_preserves_structured_file_changes():
     ]
 
 
+def test_checkpoint_cli_reports_local_commit_without_push(monkeypatch, capsys):
+    client = _CheckpointClient()
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+    monkeypatch.setattr(
+        cli,
+        "_checkpoint_git_commit",
+        lambda *args, **kwargs: {
+            "sha": "a" * 40,
+            "branch": "main",
+            "files_changed": ["notes.md"],
+            "push_failed": False,
+        },
+    )
+
+    args = SimpleNamespace(
+        cwd=None,
+        project_id="project-1",
+        summary="local progress",
+        message=None,
+        no_commit=False,
+        push=False,
+        tag="checkpoint",
+        artifact_paths=[],
+        artifact_type="code",
+    )
+
+    cli.cmd_checkpoint(args)
+
+    assert client.record_commit_calls == [
+        (
+            ("project-1", "a" * 40),
+            {
+                "message": "research: local progress",
+                "branch": "main",
+                "files_changed": ["notes.md"],
+            },
+        )
+    ]
+    assert client.log_calls == [
+        (
+            "project-1",
+            {
+                "function_name": "checkpoint",
+                "message": "local progress",
+                "tag": "checkpoint",
+                "meta_data": {"commit_sha": "a" * 40},
+            },
+        )
+    ]
+    assert '"commit_sha": "' + ("a" * 40) + '"' in capsys.readouterr().out
+
+
+def test_checkpoint_cli_no_push_overrides_push(monkeypatch):
+    client = _CheckpointClient()
+    captured = {}
+
+    def fake_checkpoint_git_commit(*args, **kwargs):
+        captured["push"] = kwargs["push"]
+        return {
+            "sha": "a" * 40,
+            "branch": "main",
+            "files_changed": ["notes.md"],
+            "push_failed": False,
+        }
+
+    monkeypatch.setattr(cli, "_get_client", lambda: client)
+    monkeypatch.setattr(cli, "_checkpoint_git_commit", fake_checkpoint_git_commit)
+
+    cli.cmd_checkpoint(
+        SimpleNamespace(
+            cwd=None,
+            project_id="project-1",
+            summary="local progress",
+            message=None,
+            no_commit=False,
+            push=True,
+            no_push=True,
+            tag="checkpoint",
+            artifact_paths=[],
+            artifact_type="code",
+        )
+    )
+
+    assert captured["push"] is False
+    assert client.record_commit_calls
+
+
 def test_write_project_context_preserves_safe_handoff_mode(tmp_path: Path):
     cli._write_arh_project_context(
         str(tmp_path),
@@ -697,6 +799,31 @@ def test_write_project_context_preserves_safe_handoff_mode(tmp_path: Path):
     settings = json.loads((tmp_path / ".arh" / "settings.json").read_text())
     assert settings["auto_commit"] is True
     assert settings["codex_commit_mode"] == "handoff"
+
+
+def test_research_setup_summary_respects_no_git(capsys):
+    cli._print_research_setup_summary(
+        SimpleNamespace(
+            title="No Git Project",
+            no_git=True,
+            visibility="private",
+            watch_dir=None,
+            runtime="",
+        ),
+        "project-1",
+        {
+            "repo_linked": False,
+            "workspace_initialized": False,
+            "git_hook": False,
+            "gitleaks_status": "available",
+            "adapter_status": {},
+            "claude_hooks": False,
+        },
+    )
+
+    stderr = capsys.readouterr().err
+    assert "Git Repo:   disabled (--no-git)" in stderr
+    assert "local commits tracked" not in stderr
 
 
 def test_write_project_context_preserves_unknown_settings(tmp_path: Path):

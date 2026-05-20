@@ -14,13 +14,14 @@ def register(mcp):
         project_id: str,
         summary: str,
         commit: bool = True,
+        push: bool = False,
         commit_message: str | None = None,
         tag: str = "checkpoint",
         artifact_paths: list[str] | None = None,
         artifact_type: str = "code",
         cwd: str | None = None,
     ) -> dict:
-        """Mark a progress checkpoint: commit current work, push, log it, and optionally curate artifacts.
+        """Mark a progress checkpoint: commit current work locally, log it, and optionally curate artifacts.
 
         Call this after any tool-chain that produced a tracked file change. This is the
         preferred way to commit research work — it keeps the project timeline coherent by
@@ -30,8 +31,11 @@ def register(mcp):
             project_id: UUID of the active research project.
             summary: One short sentence — what just got done. Used as the log title
                      and (if commit_message is None) as the git commit message.
-            commit: If True (default), runs `git add -A && git commit -m ... && git push`
+            commit: If True (default), runs `git add -A && git commit -m ...`
                     in `cwd`. Set False if the caller has already committed.
+            push: If True, push after creating the checkpoint commit. Defaults
+                  to False; ARH records local commits immediately and the git
+                  pre-push hook attaches GitHub metadata after push.
             commit_message: Override for the git commit message. Defaults to `summary`
                             prefixed with `research: ` if no type prefix is present.
             tag: Research log tag. Default "checkpoint".
@@ -58,12 +62,12 @@ def register(mcp):
 
         work_dir = Path(cwd) if cwd else Path.cwd()
 
-        # 1. git commit + push
+        # 1. git commit locally; push only when explicitly requested.
         if commit:
             msg = commit_message or (
                 summary if ":" in summary else f"research: {summary}"
             )
-            git_result = await _git_commit_and_push(work_dir, msg)
+            git_result = await _git_commit_and_push(work_dir, msg, push=push)
             if git_result.get("error"):
                 if git_result.get("reason") == "no_changes":
                     warnings.append(
@@ -86,7 +90,9 @@ def register(mcp):
                         "Run `git push` manually or check remote."
                     )
 
-        # 2. report commit to backend (best-effort)
+        # 2. report commit to backend (best-effort). Local commits should appear
+        # in the project timeline immediately; the pre-push hook later attaches
+        # GitHub repository metadata after the commit reaches the remote.
         if commit_sha:
             try:
                 await arh_client.post(
@@ -143,8 +149,8 @@ def register(mcp):
         }
 
 
-async def _git_commit_and_push(work_dir, message: str) -> dict:
-    """Run `git add -A && git commit -m <message> && git push` in work_dir.
+async def _git_commit_and_push(work_dir, message: str, push: bool = False) -> dict:
+    """Run `git add -A && git commit -m <message>` in work_dir.
 
     Returns:
         {"sha": "...", "push_failed": bool}  on success
@@ -205,6 +211,9 @@ async def _git_commit_and_push(work_dir, message: str) -> dict:
     rc, out, _ = await run(["git", "rev-parse", "HEAD"])
     sha = out.strip() if rc == 0 else None
 
+    if not push:
+        return {"sha": sha, "push_failed": False}
+
     rc, _, _ = await run(["git", "push"])
     return {"sha": sha, "push_failed": rc != 0}
 
@@ -244,7 +253,7 @@ async def _scan_staged_secrets(work_dir: Path, run) -> dict:
     if not binary:
         return {
             "blocked": True,
-            "error": "gitleaks is required before ARH checkpoint can commit and push.",
+            "error": "gitleaks is required before ARH checkpoint can commit.",
             "fix": "Install gitleaks, then rerun checkpoint.",
         }
 

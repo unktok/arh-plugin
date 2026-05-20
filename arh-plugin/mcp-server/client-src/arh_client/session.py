@@ -11,6 +11,7 @@ from arh_client.git_tracker import (
     detect_git_info,
     install_post_commit_hook,
     uninstall_post_commit_hook,
+    uninstall_push_tracking_hook,
 )
 from arh_client.log_buffer import LogBuffer
 from arh_client.observer import FileObserver
@@ -120,7 +121,7 @@ class AgentSession:
         )
         pid = self._project["id"]
 
-        # 2. Auto-detect and link git repository
+        # 2. Auto-detect and link existing git repository
         if self._git_auto_detect:
             git_info = detect_git_info(os.getcwd())
             if git_info:
@@ -130,17 +131,17 @@ class AgentSession:
                         self._client.link_repository(pid, remote_url, branch)
                     except Exception:
                         logger.warning("Failed to link git repository", exc_info=True)
-                    try:
-                        hook_path = install_post_commit_hook(
-                            pid,
-                            self._client._base_url,
-                            self._client._api_key,
-                        )
-                        if hook_path:
-                            self._git_hook_installed = True
-                            self._git_repo_dir = os.getcwd()
-                    except Exception:
-                        logger.warning("Failed to install post-commit hook", exc_info=True)
+                try:
+                    hook_path = install_post_commit_hook(
+                        pid,
+                        self._client._base_url,
+                        self._client._api_key,
+                    )
+                    if hook_path:
+                        self._git_hook_installed = True
+                        self._git_repo_dir = os.getcwd()
+                except Exception:
+                    logger.warning("Failed to install git hooks", exc_info=True)
 
         # 3. Create and start LogBuffer
         self._buffer = LogBuffer(
@@ -185,12 +186,13 @@ class AgentSession:
         exc_val: BaseException | None,
         exc_tb: Any,
     ) -> bool:
-        # 1. Uninstall git post-commit hook
+        # 1. Uninstall session git hooks
         if self._git_hook_installed:
             try:
+                uninstall_push_tracking_hook(self._git_repo_dir)
                 uninstall_post_commit_hook(self._git_repo_dir)
             except Exception:
-                logger.warning("Error uninstalling post-commit hook", exc_info=True)
+                logger.warning("Error uninstalling git hook", exc_info=True)
             self._git_hook_installed = False
 
         # 2. Stop FileObserver

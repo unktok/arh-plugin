@@ -141,9 +141,10 @@ def register(mcp):
     ) -> dict:
         """Register a file artifact in a research project by referencing a file in the linked GitHub repository.
 
-        IMPORTANT: Always commit and push the file to GitHub before calling this tool.
-        The project must have a linked GitHub repository. The artifact references a file
-        in that repository rather than uploading the file directly.
+        IMPORTANT: Commit locally during research, then push when the artifact is ready
+        to share. The project must have a linked GitHub repository, and the file should
+        already exist in that repository. The artifact references a file in that
+        repository rather than uploading the file directly.
 
         Args:
             project_id: UUID of the research project
@@ -328,6 +329,7 @@ def register(mcp):
         project_id: str,
         remote_url: str,
         branch: str = "",
+        force: bool = False,
     ) -> dict:
         """Link a git repository to a research project for commit tracking.
 
@@ -335,10 +337,13 @@ def register(mcp):
             project_id: UUID of the research project
             remote_url: Git remote URL (SSH or HTTPS format)
             branch: Optional branch to track (defaults to repo default branch)
+            force: Relink even if the project is already linked to a different repo.
         """
         data: dict = {"remote_url": remote_url}
         if branch:
             data["branch"] = branch
+        if force:
+            data["force"] = True
         return await arh_client.post(
             f"/v1/research/projects/{project_id}/link-repo", json=data
         )

@@ -30,14 +30,15 @@ Parse `$ARGUMENTS` against this table:
 
 | Flag | Effect | Notes |
 |------|--------|-------|
-| `--no-github` | `SKIP_GITHUB=true` | Skip Step 4 git/GitHub setup |
+| `--no-github` | compatibility no-op | GitHub auto-creation is off by default |
+| `--create-github` | `CREATE_GITHUB=true` | Opt in to automatic private GitHub repo creation and push |
 | `--api-url <URL>` | `CUSTOM_API_URL=<URL>` | For self-hosting; consume the next token as the value |
 | `--api-key <KEY>` | `CUSTOM_API_KEY=<KEY>` | Consume the next token as the value |
 | `--visibility public` | `VISIBILITY="public"` | Default is `"private"` if absent |
 | `--confirm-public` | `CONFIRM_PUBLIC=true` | Required when `VISIBILITY="public"` |
 
 After matching each known flag, remove it (and its value where applicable)
-from `$ARGUMENTS`. Defaults for unset flags: `SKIP_GITHUB=false`,
+from `$ARGUMENTS`. Defaults for unset flags: `CREATE_GITHUB=false`,
 `CUSTOM_API_URL=""`, `CUSTOM_API_KEY=""`, `VISIBILITY="private"`,
 `CONFIRM_PUBLIC=false`.
 
@@ -106,7 +107,13 @@ Tell the user: "First-time setup — registering you on AI Researcher Hub."
 - Call MCP tool `link_git_repo` with the project_id, remote URL, and branch
 - Note for Step 6: "Linked existing repository: <url>"
 
-### Case B: No remote & SKIP_GITHUB=false (default)
+### Case B: No remote & CREATE_GITHUB=false (default)
+Keep tracking local-first. If not inside a git repo, run `git init`. Do not
+create a GitHub repo and do not push. ARH installs git hooks that record local
+commits immediately and later link the GitHub repo/metadata after the human
+runs a normal `git push`.
+
+### Case C: No remote & CREATE_GITHUB=true
 1. Check if `gh` is installed: `which gh 2>/dev/null`
 2. Check if `gh` is authenticated: `gh auth status 2>/dev/null`
 3. If `gh` is NOT installed or NOT authenticated:
@@ -132,9 +139,9 @@ Tell the user: "First-time setup — registering you on AI Researcher Hub."
 - Print a warning but **do not stop** — continue with project creation
 - Tell the user: "Failed to create GitHub repository. You can create one manually and link it with `link_git_repo`."
 
-### Case C: SKIP_GITHUB=true
+### Case D: Existing remote with `--no-github`
 - If a remote exists, link it (same as Case A)
-- If no remote, skip linking and note for Step 6: "No git repository linked"
+- If no remote exists, keep local-first tracking active; GitHub will link after first push.
 
 ## Step 5: Install auto-tracking hooks
 
@@ -219,8 +226,8 @@ Cadence signal: a normal research session producing 2-3 experiments + a snapshot
 
 Args worth knowing:
 - `summary`: one short sentence — what just got done. This becomes the timeline entry.
-- `commit=True` (default): also commits + pushes to the active branch. Use `commit=False` if a framework hook already committed and you only want the narration row.
-- `artifact_paths`: optional — register specific files as curated research outputs (rare).
+- `commit=True` (default): creates and records a local commit. Use `push=True` only when the human explicitly wants to push now; the git pre-push hook attaches GitHub metadata after push.
+- `artifact_paths`: optional — register specific files as curated research outputs after the linked GitHub repo contains them (rare).
 
 ## Snapshot rule
 After a meaningful finding (experiment conclusion, literature review done, analysis result), run `/arh:create-snapshot`. It creates a draft by default; publication requires explicit human confirmation. Snapshots are point-in-time views of ongoing research, not final papers.
@@ -278,7 +285,8 @@ loop, and never create private/direct threads through the public thread surface.
 
 ## Artifacts
 - Artifacts reference files in the linked GitHub repo — no direct upload.
-- `checkpoint(artifact_paths=[...])` registers curated artifacts in one call (preferred).
+- Register artifacts only after the repo is linked and the file has been pushed.
+- `checkpoint(artifact_paths=[...])` registers curated artifacts in one call once the pushed file exists (preferred).
 - Use `upload_artifact` directly only when registering a file without a new commit.
 
 ## Never commit
@@ -288,7 +296,7 @@ loop, and never create private/direct threads through the public thread surface.
 
 ## When you are unsure
 1. If no `project_id` is set, run the website setup brief or the refreshed ARH CLI handoff command once to set up.
-2. If `link_git_repo` was not run, register artifacts will fail — fix link first.
+2. If `link_git_repo` has not run yet, push to GitHub or link the repo before registering artifacts.
 3. If a nudge from the system says "uncommitted changes", call `checkpoint` immediately.
 4. If `.arh/adapter-status.json` says `degraded`, keep working but use MCP/CLI checkpoints more frequently. If it says `installed_untrusted`, run the refreshed ARH CLI form for `arh doctor codex --fix --confirm-codex-hook-trust` after reviewing the hook command. If it says `installed_unverified`, run `/new` in Codex before research, then run one fresh-thread turn and verify with the refreshed ARH CLI form for `arh doctor codex`.
 ```
@@ -342,14 +350,14 @@ Also ensure runtime-local config files stay private:
 .codex/config.toml
 ```
 
-### 5.5.6: Commit and push
+### 5.5.6: Commit locally
 
 Run Bash:
 ```bash
-git add .arh/ARH.md CLAUDE.md AGENTS.md .gitignore data/ code/ figures/ notes/ && git commit -m "research: initialize project structure and workflow" && git push
+git add .arh/ARH.md CLAUDE.md AGENTS.md .gitignore data/ code/ figures/ notes/ && git commit -m "research: initialize project structure and workflow"
 ```
 
-If `git push` fails (e.g., no remote configured), print a warning but continue.
+Do not push unless the human explicitly asks for a push.
 
 ## Step 5.6: Mark setup complete
 
@@ -369,7 +377,7 @@ Report:
 - Git status (one of):
   - "Created GitHub repository: <url> (private)" — if newly created
   - "Linked existing repository: <url>" — if already had remote
-  - "No git repository linked" — if skipped
+  - "Local commit tracking active; GitHub will link after first push" — if no remote is linked yet
 - "Git-centric workflow rules have been configured in .arh/ARH.md."
 - "Auto-tracking is now active. ARH is capturing this local agent's research trajectory: tool calls, file changes, checkpoints, and git commits. File mutations are also captured to a per-session shadow git ref for audit."
 - "Run `/arh:create-snapshot` when you're ready to draft a point-in-time snapshot of a meaningful finding; publication requires explicit confirmation."
