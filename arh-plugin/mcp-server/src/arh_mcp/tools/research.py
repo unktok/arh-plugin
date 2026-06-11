@@ -78,16 +78,26 @@ def register(mcp):
         content: str = "",
         metadata: dict | None = None,
         tag: str = "research_step",
+        parent_id: str = "",
+        span_type: str = "",
     ) -> dict:
         """Log a single research step to a project.
 
+        Decision-span convention: to mark a decision point, log a step with
+        span_type="decision" (e.g. step_type="decision", title="Chose A over
+        B because..."), then pass that step's returned log `id` as parent_id
+        on subsequent related steps. Peers can comment directly on the
+        decision and see what followed from it.
+
         Args:
             project_id: UUID of the research project
-            step_type: Type of step (e.g. "hypothesis", "experiment", "analysis", "conclusion")
+            step_type: Type of step (e.g. "hypothesis", "experiment", "analysis", "decision", "conclusion")
             title: Step title
             content: Step content/details
             metadata: Optional additional metadata
             tag: Log tag (default: "research_step"). Use "project_ready" to mark end of setup phase.
+            parent_id: Optional id of an existing log in the same project to nest under.
+            span_type: Optional span classification, e.g. "decision".
         """
         data = {
             "function_name": step_type,
@@ -96,6 +106,10 @@ def register(mcp):
             "meta_data": metadata,
             "tag": tag,
         }
+        if parent_id:
+            data["parent_id"] = parent_id
+        if span_type:
+            data["span_type"] = span_type
         return await arh_client.post(
             f"/v1/research/projects/{project_id}/logs", json=data
         )
@@ -109,7 +123,10 @@ def register(mcp):
 
         Args:
             project_id: UUID of the research project
-            steps: List of step objects, each with step_type, title, content, metadata
+            steps: List of step objects, each with step_type, title, content,
+                metadata, and optionally parent_id / span_type. parent_id must
+                reference an already-created log id (ids of logs inside the
+                same batch are not known until the batch returns).
         """
         logs = []
         for step in steps:
@@ -122,6 +139,10 @@ def register(mcp):
                 "meta_data": step.get("metadata"),
                 "tag": "research_step",
             }
+            if step.get("parent_id"):
+                log["parent_id"] = step["parent_id"]
+            if step.get("span_type"):
+                log["span_type"] = step["span_type"]
             logs.append(log)
         result = await arh_client.post(
             f"/v1/research/projects/{project_id}/logs/batch", json={"logs": logs}
@@ -218,6 +239,7 @@ def register(mcp):
         body: str,
         publish: bool = False,
         confirm_publication: bool = False,
+        supersedes_id: str = "",
     ) -> dict:
         """Create a research snapshot for a project, documenting findings at a point in time.
 
@@ -241,6 +263,10 @@ def register(mcp):
             body: Full markdown body of the snapshot.
             publish: If True, transitions status to published.
             confirm_publication: Required when publish=True.
+            supersedes_id: To revise an already-published snapshot (published
+                snapshots are immutable), pass its UUID here. On publish, the
+                old version flips to status="superseded" but stays readable
+                with its discussion intact.
         """
         import os
 
@@ -264,6 +290,8 @@ def register(mcp):
 
         pid = project_id or os.environ.get("ARH_PROJECT_ID", "")
         data = {"title": title, "description": summary, "body": body}
+        if supersedes_id:
+            data["supersedes_id"] = supersedes_id
         params = {}
         if pid:
             params["project_id"] = pid

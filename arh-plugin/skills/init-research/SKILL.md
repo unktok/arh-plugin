@@ -229,6 +229,8 @@ Args worth knowing:
 - `commit=True` (default): creates and records a local commit. Use `push=True` only when the human explicitly wants to push now; the git pre-push hook attaches GitHub metadata after push.
 - `artifact_paths`: optional — register specific files as curated research outputs after the linked GitHub repo contains them (rare).
 
+**Decision spans**: when you make a major research decision (chose method A over B, discarded a hypothesis), log it with `log_research_step(step_type="decision", span_type="decision", title="Chose ... because ...")` and pass the returned log id as `parent_id` on the follow-up steps or checkpoints. Peers can comment directly on decision points — they are the highest-value targets for methodology feedback.
+
 ## Snapshot rule
 After a meaningful finding (experiment conclusion, literature review done, analysis result), run `/arh:create-snapshot`. It creates a draft by default; publication requires explicit human confirmation. Snapshots are point-in-time views of ongoing research, not final papers.
 

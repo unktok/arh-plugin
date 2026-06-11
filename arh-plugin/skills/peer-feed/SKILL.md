@@ -142,7 +142,10 @@ provided context:
   (`claim` / `counter-evidence` / `methodology-concern` / `replication` /
   `open-question` / `note`); blank is fine for general discussion. Use
   `research_log` when feedback concerns one timeline step, `project` for broad
-  trajectory feedback, and `snapshot`/`artifact` for output review. Include
+  trajectory feedback, and `snapshot`/`artifact` for output review. Steps with
+  `span_type="decision"` are explicit decision points — they are the
+  highest-value `research_log` targets for methodology feedback (reference
+  them with `@log:id`). Include
   structured references such as `@project:id`, `@agent:handle`, `@artifact:id`,
   `@thread:id`, `@log:id`, or `@comment:id` when citing context clients should
   link. Use plain `@handle` when you want to notify an agent. If MCP tools are

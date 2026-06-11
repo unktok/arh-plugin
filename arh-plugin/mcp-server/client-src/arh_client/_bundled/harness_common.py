@@ -88,6 +88,40 @@ def _valid_api_key(value: str) -> bool:
     return value.startswith("arh_sk_") and "${" not in value
 
 
+def digest_enabled(cwd: Path) -> bool:
+    """Whether the SessionStart community-digest nudge should be shown.
+
+    Precedence: ARH_DIGEST env var > project .arh/.env ARH_DIGEST >
+    ~/.arh/credentials "digest" boolean > default on.
+    """
+
+    def _parse(value: str) -> bool | None:
+        v = value.strip().lower()
+        if v in ("off", "false", "0", "no"):
+            return False
+        if v in ("on", "true", "1", "yes"):
+            return True
+        return None
+
+    env_value = os.environ.get("ARH_DIGEST")
+    if env_value is not None:
+        parsed = _parse(env_value)
+        if parsed is not None:
+            return parsed
+
+    project_env = read_env_file(project_context_dir(cwd) / ".arh" / ".env")
+    if "ARH_DIGEST" in project_env:
+        parsed = _parse(project_env["ARH_DIGEST"])
+        if parsed is not None:
+            return parsed
+
+    creds = read_json_file(Path.home() / ".arh" / "credentials")
+    if isinstance(creds.get("digest"), bool):
+        return creds["digest"]
+
+    return True
+
+
 def load_context(cwd: Path) -> dict[str, str]:
     project_dir = project_context_dir(cwd)
     project_context_found = has_project_context(project_dir)

@@ -116,6 +116,94 @@ def load_arh_env():
         os.environ.pop("ARH_TRACE_ID", None)
 
 
+def _digest_enabled(cwd: str) -> bool:
+    """Whether the SessionStart community-digest nudge should be shown.
+
+    Precedence: ARH_DIGEST env var > project .arh/.env ARH_DIGEST >
+    ~/.arh/credentials "digest" boolean > default on. The digest is a
+    counts-only pointer injected only at session start; this flag exists so
+    agents/operators can opt out entirely.
+    """
+
+    def _parse(value: str) -> bool | None:
+        v = value.strip().lower()
+        if v in ("off", "false", "0", "no"):
+            return False
+        if v in ("on", "true", "1", "yes"):
+            return True
+        return None
+
+    env_value = os.environ.get("ARH_DIGEST")
+    if env_value is not None:
+        parsed = _parse(env_value)
+        if parsed is not None:
+            return parsed
+
+    env_path = os.path.join(cwd, ".arh", ".env")
+    if os.path.isfile(env_path):
+        try:
+            with open(env_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("ARH_DIGEST=") :
+                        parsed = _parse(line.split("=", 1)[1])
+                        if parsed is not None:
+                            return parsed
+        except OSError:
+            pass
+
+    creds_path = os.path.expanduser("~/.arh/credentials")
+    if os.path.isfile(creds_path):
+        try:
+            with open(creds_path) as f:
+                creds = json.loads(f.read())
+            if isinstance(creds.get("digest"), bool):
+                return creds["digest"]
+        except (OSError, ValueError):
+            pass
+
+    return True
+
+
+def _build_hook_output(event_type: str, result: dict, digest_enabled: bool) -> dict | None:
+    """Build the agent/user-visible hook output dict, or None for nothing.
+
+    The community digest (nudge_kind == "community_digest") only ever arrives
+    on SessionStart responses and is dropped here when the digest is disabled.
+    Other operational nudges are unaffected by the digest setting.
+    """
+    lines: list[str] = []
+    if event_type == "SessionStart" and result.get("project_id"):
+        status = result.get("status", "")
+        label = "reused" if "reused" in status else "created"
+        lines.append(
+            f"Research project {label}: {result['project_id']} — "
+            f"{result.get('title', 'Untitled')}"
+        )
+    nudge = result.get("nudge")
+    if nudge and not (
+        result.get("nudge_kind") == "community_digest" and not digest_enabled
+    ):
+        lines.append(nudge)
+
+    if not lines:
+        return None
+    text = "\n".join(lines)
+    # SessionStart / UserPromptSubmit / PostToolUse accept
+    # hookSpecificOutput.additionalContext (injected into agent context).
+    # Stop / SubagentStop do not — use top-level systemMessage (surfaced to
+    # the user) instead. This keeps the handler schema-compliant for every
+    # event type.
+    if event_type in ("SessionStart", "UserPromptSubmit", "PostToolUse"):
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": event_type,
+                "additionalContext": text,
+            }
+        }
+    return {"systemMessage": text}
+
+
 def _arh_settings_path(cwd: str) -> str:
     """Return path to .arh/settings.json in the project directory."""
     return os.path.join(cwd, ".arh", "settings.json")
@@ -982,34 +1070,8 @@ def main():
                 _write_arh_settings(cwd, arh_settings)
 
         # Emit agent-visible context based on what the event schema allows.
-        lines: list[str] = []
-        if event_type == "SessionStart" and result.get("project_id"):
-            status = result.get("status", "")
-            label = "reused" if "reused" in status else "created"
-            lines.append(
-                f"Research project {label}: {result['project_id']} — "
-                f"{result.get('title', 'Untitled')}"
-            )
-        nudge = result.get("nudge")
-        if nudge:
-            lines.append(nudge)
-
-        if lines:
-            text = "\n".join(lines)
-            # SessionStart / UserPromptSubmit / PostToolUse accept
-            # hookSpecificOutput.additionalContext (injected into agent
-            # context). Stop / SubagentStop do not — use top-level
-            # systemMessage (surfaced to the user) instead. This keeps
-            # the handler schema-compliant for every event type.
-            if event_type in ("SessionStart", "UserPromptSubmit", "PostToolUse"):
-                output = {
-                    "hookSpecificOutput": {
-                        "hookEventName": event_type,
-                        "additionalContext": text,
-                    }
-                }
-            else:
-                output = {"systemMessage": text}
+        output = _build_hook_output(event_type, result, _digest_enabled(cwd))
+        if output is not None:
             print(json.dumps(output))
     except (urllib.error.URLError, OSError, json.JSONDecodeError):
         # Silently fail — don't block Claude

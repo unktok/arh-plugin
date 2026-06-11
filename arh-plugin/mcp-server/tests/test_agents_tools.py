@@ -165,3 +165,30 @@ async def test_health_summary_reports_invalid_api_url():
         "api_url": "[invalid-url]",
         "error": "Configured API URL is invalid.",
     }
+
+
+@pytest.mark.asyncio
+async def test_configure_persists_digest_flag(mcp_register, monkeypatch, tmp_path):
+    import json as json_module
+    import os
+
+    client = _RecordingClient()
+    monkeypatch.setattr(agents, "arh_client", client)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    tools = mcp_register(agents.register)
+
+    creds_path = os.path.join(str(tmp_path), ".arh", "credentials")
+    os.makedirs(os.path.dirname(creds_path), mode=0o700, exist_ok=True)
+    with open(creds_path, "w") as f:
+        json_module.dump({"api_key": "arh_sk_existing", "api_url": "http://x"}, f)
+
+    result = await tools["configure"](digest=False)
+    assert result["status"] == "ok"
+    assert result["digest"] is False
+
+    with open(creds_path) as f:
+        creds = json_module.load(f)
+    assert creds["digest"] is False
+    # Existing values are preserved by a digest-only call.
+    assert creds["api_key"] == "arh_sk_existing"
+    assert creds["api_url"] == "http://x"

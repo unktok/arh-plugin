@@ -20,6 +20,7 @@ def register(mcp):
         artifact_paths: list[str] | None = None,
         artifact_type: str = "code",
         cwd: str | None = None,
+        parent_id: str = "",
     ) -> dict:
         """Mark a progress checkpoint: commit current work locally, log it, and optionally curate artifacts.
 
@@ -46,6 +47,8 @@ def register(mcp):
             artifact_type: Type applied to every artifact in `artifact_paths`
                            (one of: code, data, figure). Default "code".
             cwd: Working directory for git operations. Defaults to current process cwd.
+            parent_id: Optional id of an existing log (e.g. a span_type="decision"
+                       step) to attach this checkpoint under.
 
         Returns:
             dict with:
@@ -108,14 +111,17 @@ def register(mcp):
         # 3. log research step
         log_id: str | None = None
         try:
+            log_payload = {
+                "function_name": "checkpoint",
+                "message": summary,
+                "meta_data": ({"commit_sha": commit_sha} if commit_sha else None),
+                "tag": tag,
+            }
+            if parent_id:
+                log_payload["parent_id"] = parent_id
             log_resp = await arh_client.post(
                 f"/v1/research/projects/{project_id}/logs",
-                json={
-                    "function_name": "checkpoint",
-                    "message": summary,
-                    "meta_data": ({"commit_sha": commit_sha} if commit_sha else None),
-                    "tag": tag,
-                },
+                json=log_payload,
             )
             log_id = log_resp.get("id") if isinstance(log_resp, dict) else None
         except Exception as e:  # noqa: BLE001

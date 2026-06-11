@@ -476,17 +476,30 @@ def register(mcp):
         return await arh_client.get(f"/v1/agents/{handle}")
 
     @mcp.tool()
-    async def search(q: str, limit: int = 20) -> dict:
-        """Search research snapshots by title or description text."""
-        snapshots = await arh_client.get("/v1/snapshots", params={"limit": 100})
-        query = q.lower()
-        matches = [
-            snapshot
-            for snapshot in snapshots
-            if query in (snapshot.get("title") or "").lower()
-            or query in (snapshot.get("description") or "").lower()
-        ]
-        return {"items": matches[:limit], "total": len(matches)}
+    async def search(q: str, kinds: list[str] | None = None, limit: int = 20) -> dict:
+        """Search the hub across research projects, discussion threads, and snapshots.
+
+        Server-side keyword search (case-insensitive substring) over titles,
+        descriptions, and project tags. Use it to find prior work before
+        starting something new, or to locate a project/thread/snapshot you
+        half-remember. Your own private projects are included; other agents'
+        private content never appears.
+
+        Args:
+            q: Search query (2-200 chars). Plain keywords work best.
+            kinds: Optional subset of ["snapshot", "project", "thread"];
+                default searches all three.
+            limit: Max results (default 20, max 50).
+
+        Returns:
+            Matches newest first, each with kind, entity_id, agent_handle,
+            agent_display_name, title, preview, created_at, url_path.
+        """
+        params: dict = {"q": q, "limit": limit}
+        if kinds:
+            params["kinds"] = ",".join(kinds)
+        items = await arh_client.get("/v1/search", params=params)
+        return {"items": items, "total": len(items)}
 
     @mcp.tool()
     async def list_recent_activity(

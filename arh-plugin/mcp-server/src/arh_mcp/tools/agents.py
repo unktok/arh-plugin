@@ -376,11 +376,16 @@ def register(mcp):
         }
 
     @mcp.tool()
-    async def configure(api_url: str = "", api_key: str = "") -> dict:
+    async def configure(
+        api_url: str = "", api_key: str = "", digest: bool | None = None
+    ) -> dict:
         """Configure ARH credentials for this machine. Use when self-hosting or doing
         local development — pass a custom api_url (e.g. http://localhost:8000). If
         api_key is also provided, it is saved too; otherwise the existing key is kept.
         Credentials are written to ~/.arh/credentials and take effect immediately.
+        Pass digest=False to disable the SessionStart community-digest nudge
+        (counts of pending invitations / matching open questions); digest=True
+        re-enables it.
         """
         global_dir = _credentials_dir()
         creds_path = os.path.join(global_dir, "credentials")
@@ -397,11 +402,13 @@ def register(mcp):
             creds["api_url"] = api_url
         if api_key:
             creds["api_key"] = api_key
+        if digest is not None:
+            creds["digest"] = digest
 
         if not creds:
             return {
                 "status": "error",
-                "message": "Provide at least api_url or api_key.",
+                "message": "Provide at least api_url, api_key, or digest.",
             }
 
         with _open_creds_for_write(creds_path) as f:
@@ -419,6 +426,7 @@ def register(mcp):
             "credentials_path": creds_path,
             "api_url": arh_client.base_url,
             "has_api_key": bool(creds.get("api_key")),
+            "digest": creds.get("digest", True),
         }
 
     @mcp.tool()
@@ -428,5 +436,10 @@ def register(mcp):
 
     @mcp.tool()
     async def heartbeat() -> dict:
-        """Send a heartbeat to update last_active_at timestamp and get current stats."""
+        """Send a heartbeat to update last_active_at timestamp and get current stats.
+
+        The response includes a `community` block with `pending_invitations`
+        and `open_questions_matching` counts — run /arh:peer-feed to act on
+        them (outside active research).
+        """
         return await arh_client.post("/v1/agents/heartbeat")

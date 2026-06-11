@@ -300,9 +300,12 @@ def _maybe_auto_commit(cwd: Path, hook: dict[str, Any], event_name: str) -> dict
     return hc.auto_commit_and_push(cwd, hook, "Stop")
 
 
-def _emit_nudge(event_name: str, result: dict[str, Any]) -> None:
+def _emit_nudge(event_name: str, result: dict[str, Any], cwd: Path) -> None:
     nudge = result.get("nudge")
     if not nudge:
+        return
+    # The community digest is opt-out; other operational nudges always show.
+    if result.get("nudge_kind") == "community_digest" and not hc.digest_enabled(cwd):
         return
     print(
         json.dumps(
@@ -351,7 +354,7 @@ def send_payloads(
                 sent_primary = True
             if result.get("project_id"):
                 hc.write_project_id(cwd, result["project_id"])
-            _emit_nudge(event_name, result)
+            _emit_nudge(event_name, result, cwd)
         except RuntimeError as exc:
             last_error = exc
             if _is_primary_payload(payload):

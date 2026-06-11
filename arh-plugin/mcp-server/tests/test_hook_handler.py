@@ -362,3 +362,109 @@ def test_load_arh_env_drops_ambient_project_context_without_local_setup(
 def _hook_handler_must_exist():
     """Sanity check — fail loudly if the hook-handler script is missing."""
     assert HOOK_HANDLER.is_file(), f"hook-handler.py not found at {HOOK_HANDLER}"
+
+
+def _run_handler_snippet(tmp_path: Path, body: str, env_extra: dict | None = None) -> str:
+    """Exec a snippet against the hook-handler module, return last stdout line."""
+    runner = (
+        "import importlib.util, json, os, sys\n"
+        f"sys.path.insert(0, os.path.dirname(r'{HOOK_HANDLER}'))\n"
+        f"spec = importlib.util.spec_from_file_location('hh', r'{HOOK_HANDLER}')\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(mod)\n"
+        + body
+    )
+    env = os.environ.copy()
+    env.pop("ARH_DIGEST", None)
+    fake_home = tmp_path / "digest-home"
+    fake_home.mkdir(exist_ok=True)
+    env["HOME"] = str(fake_home)
+    if env_extra:
+        env.update(env_extra)
+    result = subprocess.run(
+        [sys.executable, "-c", runner],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=15,
+    )
+    assert result.returncode == 0, (
+        f"snippet failed: stdout={result.stdout} stderr={result.stderr}"
+    )
+    lines = [line for line in result.stdout.strip().splitlines() if line]
+    return lines[-1]
+
+
+def test_digest_enabled_default_on(tmp_path: Path):
+    out = _run_handler_snippet(
+        tmp_path, "print(json.dumps(mod._digest_enabled(os.getcwd())))\n"
+    )
+    assert json.loads(out) is True
+
+
+def test_digest_enabled_credentials_opt_out(tmp_path: Path):
+    fake_home = tmp_path / "digest-home"
+    fake_home.mkdir()
+    (fake_home / ".arh").mkdir()
+    (fake_home / ".arh" / "credentials").write_text(json.dumps({"digest": False}))
+    out = _run_handler_snippet(
+        tmp_path, "print(json.dumps(mod._digest_enabled(os.getcwd())))\n"
+    )
+    assert json.loads(out) is False
+
+
+def test_digest_enabled_project_env_overrides_credentials(tmp_path: Path):
+    fake_home = tmp_path / "digest-home"
+    fake_home.mkdir()
+    (fake_home / ".arh").mkdir()
+    (fake_home / ".arh" / "credentials").write_text(json.dumps({"digest": False}))
+    arh_dir = tmp_path / ".arh"
+    arh_dir.mkdir()
+    (arh_dir / ".env").write_text("ARH_DIGEST=on\n")
+    out = _run_handler_snippet(
+        tmp_path, "print(json.dumps(mod._digest_enabled(os.getcwd())))\n"
+    )
+    assert json.loads(out) is True
+
+
+def test_digest_enabled_env_var_overrides_all(tmp_path: Path):
+    arh_dir = tmp_path / ".arh"
+    arh_dir.mkdir()
+    (arh_dir / ".env").write_text("ARH_DIGEST=on\n")
+    out = _run_handler_snippet(
+        tmp_path,
+        "print(json.dumps(mod._digest_enabled(os.getcwd())))\n",
+        env_extra={"ARH_DIGEST": "off"},
+    )
+    assert json.loads(out) is False
+
+
+def test_build_hook_output_drops_digest_when_disabled(tmp_path: Path):
+    body = (
+        "result = {'project_id': 'p1', 'status': 'project_created',"
+        " 'title': 'T', 'nudge': 'ARH community: 1 pending invitation(s)',"
+        " 'nudge_kind': 'community_digest'}\n"
+        "enabled = mod._build_hook_output('SessionStart', result, True)\n"
+        "disabled = mod._build_hook_output('SessionStart', result, False)\n"
+        "print(json.dumps({'enabled': enabled, 'disabled': disabled}))\n"
+    )
+    parsed = json.loads(_run_handler_snippet(tmp_path, body))
+    enabled_text = parsed["enabled"]["hookSpecificOutput"]["additionalContext"]
+    disabled_text = parsed["disabled"]["hookSpecificOutput"]["additionalContext"]
+    assert "ARH community" in enabled_text
+    assert "ARH community" not in disabled_text
+    assert "Research project created" in disabled_text
+
+
+def test_build_hook_output_keeps_operational_nudges_when_digest_disabled(
+    tmp_path: Path,
+):
+    body = (
+        "result = {'nudge': 'Uncommitted changes detected (2 files).',"
+        " 'nudge_kind': 'uncommitted'}\n"
+        "out = mod._build_hook_output('Stop', result, False)\n"
+        "print(json.dumps(out))\n"
+    )
+    parsed = json.loads(_run_handler_snippet(tmp_path, body))
+    assert "Uncommitted" in parsed["systemMessage"]

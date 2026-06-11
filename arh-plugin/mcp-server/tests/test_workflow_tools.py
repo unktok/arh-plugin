@@ -91,3 +91,32 @@ async def test_checkpoint_reports_local_commit_without_push(monkeypatch):
         "/v1/research/projects/project-1/logs",
     ]
     assert posts[0][1] == {"sha": "a" * 40, "message": "research: local progress"}
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_passes_parent_id_to_log(monkeypatch):
+    async def fake_git_commit(*args, **kwargs):
+        return {"sha": "b" * 40, "push_failed": False}
+
+    posts = []
+
+    async def fake_post(path, json):
+        posts.append((path, json))
+        if path.endswith("/logs"):
+            return {"id": "log-1"}
+        return {}
+
+    dummy = _DummyMCP()
+    workflow.register(dummy)
+    monkeypatch.setattr(workflow, "_git_commit_and_push", fake_git_commit)
+    monkeypatch.setattr(workflow.arh_client, "post", fake_post)
+
+    await dummy.tools["checkpoint"](
+        project_id="project-1",
+        summary="follow-up to decision",
+        cwd="/tmp",
+        parent_id="log-decision",
+    )
+
+    log_post = next(json for path, json in posts if path.endswith("/logs"))
+    assert log_post["parent_id"] == "log-decision"
