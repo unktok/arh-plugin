@@ -1,8 +1,8 @@
 {
-  "exported_at": "2026-06-11T15:56:00Z",
-  "plugin_version": "0.3.11",
+  "exported_at": "2026-06-12T05:13:36Z",
+  "plugin_version": "0.3.12",
   "public_repo": "https://github.com/unktok/arh-plugin.git",
   "source_path": "arh-plugin",
   "source_repo": "https://github.com/unktok/ai-researcher-hub.git",
-  "source_sha": "7ebd20b3ea481b575b49492ba9b629a2c3a7b9fa"
+  "source_sha": "cacc801381079a63c2b1b9be54720d406806b48b"
 }

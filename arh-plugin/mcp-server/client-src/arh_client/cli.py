@@ -64,9 +64,20 @@ def _valid_api_key(value: str) -> bool:
 def _redact_cli_text(value: str) -> str:
     patterns = [
         (re.compile(r"\b(arh_sk_)[A-Za-z0-9._-]+"), r"\1[REDACTED]"),
-        (re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE), "Bearer [REDACTED]"),
-        (re.compile(r"\b(sk_live_|sk_test_|rk_live_|rk_test_|sk-or-|sk-)[A-Za-z0-9._-]{12,}"), r"\1[REDACTED]"),
-        (re.compile(r"\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{20,}"), r"\1[REDACTED]"),
+        (
+            re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+            "Bearer [REDACTED]",
+        ),
+        (
+            re.compile(
+                r"\b(sk_live_|sk_test_|rk_live_|rk_test_|sk-or-|sk-)[A-Za-z0-9._-]{12,}"
+            ),
+            r"\1[REDACTED]",
+        ),
+        (
+            re.compile(r"\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{20,}"),
+            r"\1[REDACTED]",
+        ),
         (re.compile(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b"), r"\1[REDACTED]"),
     ]
     redacted = value
@@ -235,11 +246,7 @@ def _commentable_type(value: str) -> str:
 
 
 def _split_tags(value: str | None) -> list[str]:
-    return [
-        part.strip().lower()
-        for part in (value or "").split(",")
-        if part.strip()
-    ]
+    return [part.strip().lower() for part in (value or "").split(",") if part.strip()]
 
 
 def _peer_feed_action(kind: str, **kwargs) -> dict:
@@ -270,7 +277,9 @@ def _build_peer_feed(client, args) -> dict:
     explicit_tags = _split_cli_values(getattr(args, "tags", []))
     profile_tags = _split_cli_values(profile.get("specializations") or [])
     tags = explicit_tags or profile_tags
-    tags_source = "explicit" if explicit_tags else ("profile" if profile_tags else "unfiltered")
+    tags_source = (
+        "explicit" if explicit_tags else ("profile" if profile_tags else "unfiltered")
+    )
     limit = args.limit
 
     invitations = client.list_invitations(limit=limit, status=args.status).get(
@@ -414,7 +423,9 @@ def _print_peer_feed_human(feed: dict) -> None:
     if feed["related_work"]:
         for item in feed["related_work"]:
             author = _terminal_safe(item.get("agent_handle") or "unknown")
-            title = _terminal_safe(item.get("title") or item.get("preview") or "Untitled")
+            title = _terminal_safe(
+                item.get("title") or item.get("preview") or "Untitled"
+            )
             kind = _terminal_safe(item.get("kind") or "item")
             print(f"  - {author}: {title} ({kind})")
     else:
@@ -665,7 +676,9 @@ def _runtime_adapter_status(
         "status": status,
         "degraded": status == "degraded",
         "degraded_reason": degraded_reason,
-        "capabilities": _adapter_capabilities(adapter if status != "degraded" else "generic"),
+        "capabilities": _adapter_capabilities(
+            adapter if status != "degraded" else "generic"
+        ),
         "files": files or {},
     }
 
@@ -677,7 +690,9 @@ def _install_runtime_adapter(
     project_id: str,
 ) -> dict:
     """Install the best runtime-specific adapter behind the handoff surface."""
-    requested_runtime = getattr(args, "requested_runtime", "") or getattr(args, "runtime", "")
+    requested_runtime = getattr(args, "requested_runtime", "") or getattr(
+        args, "runtime", ""
+    )
     resolved_runtime = getattr(args, "runtime", "") or "generic"
     adapter = _adapter_name(resolved_runtime)
 
@@ -750,11 +765,16 @@ def _install_runtime_adapter(
             status["native_hooks_observed_events"] = []
             status["native_hooks_missing_events"] = list(CODEX_REQUIRED_HOOK_EVENTS)
             status["codex_project_trusted"] = bool(trust.get("project_trusted"))
-            status["codex_missing_trusted_hooks"] = trust.get("missing_trusted_events", [])
+            status["codex_missing_trusted_hooks"] = trust.get(
+                "missing_trusted_events", []
+            )
             status["verification_hint"] = _codex_verification_hint(trust)
         except Exception as e:
             redacted_error = _redact_cli_text(str(e))
-            print(f"Warning: failed to install Codex hooks: {redacted_error}", file=sys.stderr)
+            print(
+                f"Warning: failed to install Codex hooks: {redacted_error}",
+                file=sys.stderr,
+            )
             status = _runtime_adapter_status(
                 adapter,
                 "degraded",
@@ -1237,7 +1257,9 @@ def _ensure_local_git_repo(cwd: str) -> bool:
             text=True,
             timeout=10,
         )
-        if root.returncode == 0 and os.path.realpath(root.stdout.strip()) == os.path.realpath(cwd):
+        if root.returncode == 0 and os.path.realpath(
+            root.stdout.strip()
+        ) == os.path.realpath(cwd):
             return True
         # Parent repositories are unrelated; initialize a nested project repo.
     init = subprocess.run(
@@ -1325,9 +1347,7 @@ def _run_research_setup(args):
     from arh_client.git_tracker import detect_git_info, install_post_commit_hook
     from arh_client._workspace import initialize_research_workspace
 
-    setup_started_at = (
-        datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    )
+    setup_started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # Step 0.5 — apply --api-url / --api-key before any network I/O.
     _apply_cli_credentials(args)
@@ -1499,7 +1519,12 @@ def _run_research_setup(args):
         "codex_hooks": (
             adapter_status.get("selected_adapter") == "codex"
             and adapter_status.get("status")
-            in {"installed", "installed_unverified", "installed_partial", "installed_untrusted"}
+            in {
+                "installed",
+                "installed_unverified",
+                "installed_partial",
+                "installed_untrusted",
+            }
         ),
         "adapter_status": adapter_status,
         "gitleaks": gitleaks_ok,
@@ -1592,6 +1617,28 @@ def _print_research_setup_summary(args, project_id: str, summary: dict):
             file=sys.stderr,
         )
         print(
+            "  Private projects are ephemeral scratch space: they are permanently",
+            file=sys.stderr,
+        )
+        print(
+            "  deleted after 24 hours of inactivity. Publish to keep the work.",
+            file=sys.stderr,
+        )
+        website_url = _website_base_url()
+        if website_url:
+            print(
+                "  Preview the private timeline in your browser (the link embeds",
+                file=sys.stderr,
+            )
+            print(
+                "  your agent key — do not share it; run it yourself, unexpanded):",
+                file=sys.stderr,
+            )
+            print(
+                f"    {_private_preview_command(website_url, project_id)}",
+                file=sys.stderr,
+            )
+        print(
             "  To publish the redacted timeline after checking security-sensitive access, run:",
             file=sys.stderr,
         )
@@ -1600,6 +1647,34 @@ def _print_research_setup_summary(args, project_id: str, summary: dict):
             file=sys.stderr,
         )
     print("", file=sys.stderr)
+
+
+def _website_base_url() -> str | None:
+    """Map the configured API URL to the public website URL.
+
+    Only the hosted ARH deployment has a known website host; self-hosted
+    API URLs return None and the preview hint is skipped.
+    """
+    creds = _read_credentials()
+    api_url = str(creds.get("api_url", "") or "").strip() or DEFAULT_API_URL
+    if api_url.rstrip("/") == DEFAULT_API_URL:
+        return "https://airesearcherhub.com"
+    return None
+
+
+def _private_preview_command(website_url: str, project_id: str) -> str:
+    """Build a copy-paste browser-open command for the private project view.
+
+    The agent API key is referenced through an UNEXPANDED $(...) substitution
+    so the raw key never appears in printed output, shell history, or agent
+    transcripts; it is resolved only when the human runs the command.
+    """
+    key_substitution = (
+        "$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("
+        '"~/.arh/credentials")))["api_key"])\')'
+    )
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    return f'{opener} "{website_url}/projects/{project_id}#key={key_substitution}"'
 
 
 def _project_create_timeout_message(exc: Exception) -> str:
@@ -1906,9 +1981,7 @@ def _codex_hooks_feature_state(config_path: str) -> dict:
 
 
 def _codex_home() -> str:
-    return os.path.abspath(
-        os.path.expanduser(os.environ.get("CODEX_HOME", "~/.codex"))
-    )
+    return os.path.abspath(os.path.expanduser(os.environ.get("CODEX_HOME", "~/.codex")))
 
 
 def _codex_user_config_path() -> str:
@@ -1933,7 +2006,9 @@ def _load_toml_document(path: str):
         with open(path, "r") as f:
             return tomlkit.parse(f.read())
     except tomlkit.exceptions.TOMLKitError as e:
-        raise ValueError("Cannot update Codex config because config.toml is invalid TOML.") from e
+        raise ValueError(
+            "Cannot update Codex config because config.toml is invalid TOML."
+        ) from e
     except OSError as e:
         raise OSError(_redact_cli_text(str(e))) from e
 
@@ -2007,7 +2082,11 @@ def _codex_project_trust_keys(project_dir: str) -> list[str]:
 
 
 def _codex_project_trusted(project_dir: str, user_config: dict | None = None) -> bool:
-    config = user_config if user_config is not None else _load_toml_config(_codex_user_config_path())
+    config = (
+        user_config
+        if user_config is not None
+        else _load_toml_config(_codex_user_config_path())
+    )
     projects = config.get("projects", {}) if isinstance(config, dict) else {}
     if not isinstance(projects, dict):
         return False
@@ -2027,10 +2106,11 @@ def _ensure_codex_project_trust(project_dir: str) -> None:
     )
 
 
-def _codex_hook_key(source_path: str, event: str, group_index: int, handler_index: int) -> str:
+def _codex_hook_key(
+    source_path: str, event: str, group_index: int, handler_index: int
+) -> str:
     return (
-        f"{source_path}:{CODEX_HOOK_EVENT_LABELS[event]}:"
-        f"{group_index}:{handler_index}"
+        f"{source_path}:{CODEX_HOOK_EVENT_LABELS[event]}:{group_index}:{handler_index}"
     )
 
 
@@ -2075,8 +2155,8 @@ def _is_legacy_arh_codex_hook_handler(
         except ValueError:
             pass
     normalized = handler_abs.replace("\\", "/")
-    return (
-        normalized.endswith("/site-packages/arh_client/_bundled/codex-hook-handler.py")
+    return normalized.endswith(
+        "/site-packages/arh_client/_bundled/codex-hook-handler.py"
     )
 
 
@@ -2154,7 +2234,11 @@ def _codex_arh_hook_trust_entries(project_dir: str) -> list[dict]:
         for group_index, group in enumerate(groups):
             if not isinstance(group, dict):
                 continue
-            matcher = group.get("matcher") if event in CODEX_HOOK_EVENTS_WITH_MATCHERS else None
+            matcher = (
+                group.get("matcher")
+                if event in CODEX_HOOK_EVENTS_WITH_MATCHERS
+                else None
+            )
             if matcher is not None:
                 matcher = str(matcher)
             hook_list = group.get("hooks", [])
@@ -2164,15 +2248,12 @@ def _codex_arh_hook_trust_entries(project_dir: str) -> list[dict]:
                 if not isinstance(hook_config, dict):
                     continue
                 command = str(hook_config.get("command") or "")
-                if (
-                    hook_config.get("type") == "command"
-                    and _is_arh_codex_hook_command(
-                        command,
-                        event=event,
-                        current_handler=current_handler,
-                        allow_legacy=True,
-                        project_dir=project_dir,
-                    )
+                if hook_config.get("type") == "command" and _is_arh_codex_hook_command(
+                    command,
+                    event=event,
+                    current_handler=current_handler,
+                    allow_legacy=True,
+                    project_dir=project_dir,
                 ):
                     entries.append(
                         {
@@ -2191,7 +2272,9 @@ def _codex_arh_hook_trust_entries(project_dir: str) -> list[dict]:
 def _codex_hook_trust_report(project_dir: str) -> dict:
     user_config = _load_toml_config(_codex_user_config_path())
     state = {}
-    hooks_section = user_config.get("hooks", {}) if isinstance(user_config, dict) else {}
+    hooks_section = (
+        user_config.get("hooks", {}) if isinstance(user_config, dict) else {}
+    )
     if isinstance(hooks_section, dict) and isinstance(hooks_section.get("state"), dict):
         state = hooks_section["state"]
 
@@ -2293,7 +2376,7 @@ def _repair_codex_setup(project_dir: str, confirm_hook_trust: bool = False) -> d
             "applied": False,
             "error": (
                 ".arh/settings.json does not contain an ARH project_id; run the "
-                f"setup brief or `{PUBLIC_ARH_CLI_PREFIX} handoff \"Project title\"` first."
+                f'setup brief or `{PUBLIC_ARH_CLI_PREFIX} handoff "Project title"` first.'
             ),
         }
 
@@ -2445,14 +2528,22 @@ def cmd_doctor_codex(args):
                 "selected_adapter": raw_status.get("selected_adapter"),
                 "status": raw_status.get("status"),
                 "degraded": raw_status.get("degraded"),
-                "degraded_reason": _redact_cli_text(str(raw_status.get("degraded_reason", ""))),
+                "degraded_reason": _redact_cli_text(
+                    str(raw_status.get("degraded_reason", ""))
+                ),
                 "native_hooks_installed": raw_status.get("native_hooks_installed"),
                 "native_hooks_verified": raw_status.get("native_hooks_verified"),
                 "native_hooks_trusted": raw_status.get("native_hooks_trusted"),
-                "native_hooks_observed_events": raw_status.get("native_hooks_observed_events", []),
-                "native_hooks_missing_events": raw_status.get("native_hooks_missing_events", []),
+                "native_hooks_observed_events": raw_status.get(
+                    "native_hooks_observed_events", []
+                ),
+                "native_hooks_missing_events": raw_status.get(
+                    "native_hooks_missing_events", []
+                ),
                 "codex_project_trusted": raw_status.get("codex_project_trusted"),
-                "codex_missing_trusted_hooks": raw_status.get("codex_missing_trusted_hooks", []),
+                "codex_missing_trusted_hooks": raw_status.get(
+                    "codex_missing_trusted_hooks", []
+                ),
                 "last_hook_event_name": raw_status.get("last_hook_event_name"),
                 "last_hook_event_at": raw_status.get("last_hook_event_at"),
             }
@@ -2465,7 +2556,9 @@ def cmd_doctor_codex(args):
     if not feature_state["hooks"]:
         issues.append(".codex/config.toml does not enable [features].hooks = true.")
     if feature_state["codex_hooks"]:
-        issues.append(".codex/config.toml still contains deprecated [features].codex_hooks.")
+        issues.append(
+            ".codex/config.toml still contains deprecated [features].codex_hooks."
+        )
     if not hooks_has_arh:
         issues.append(
             ".codex/hooks.json is missing ARH handlers for: "
@@ -2510,7 +2603,9 @@ def cmd_doctor_codex(args):
             + ", ".join(str(item) for item in missing)
         )
     if adapter_status.get("degraded"):
-        issues.append(str(adapter_status.get("degraded_reason") or "Adapter is degraded."))
+        issues.append(
+            str(adapter_status.get("degraded_reason") or "Adapter is degraded.")
+        )
 
     report = {
         "runtime": "codex",
@@ -2637,7 +2732,9 @@ def _install_hooks_inline(
             os.path.join(plugin_root, "scripts", "inject-trace-context.sh")
             if plugin_root
             else "",
-            os.path.join(os.getcwd(), "arh-plugin", "scripts", "inject-trace-context.sh"),
+            os.path.join(
+                os.getcwd(), "arh-plugin", "scripts", "inject-trace-context.sh"
+            ),
             os.path.join(
                 os.path.dirname(
                     os.path.dirname(
@@ -2796,9 +2893,7 @@ def cmd_peer_feed(args):
 
 def cmd_invitation_respond(args):
     body = _read_text_input(args.body or "", args.body_file or "", "--body")
-    reason = _read_text_input(
-        args.reason or "", args.reason_file or "", "--reason"
-    )
+    reason = _read_text_input(args.reason or "", args.reason_file or "", "--reason")
     new_info = _read_text_input(
         args.new_info or "", args.new_info_file or "", "--new-info"
     )
@@ -3097,7 +3192,9 @@ def _resolve_project_id(project_id: str = "", project_dir: str | None = None) ->
     return project_env.get("ARH_PROJECT_ID", "")
 
 
-def _run_git(project_dir: str, args: list[str], timeout: int = 60) -> tuple[int, str, str]:
+def _run_git(
+    project_dir: str, args: list[str], timeout: int = 60
+) -> tuple[int, str, str]:
     try:
         proc = subprocess.run(
             ["git", *args],
@@ -3176,14 +3273,16 @@ def _scan_staged_secrets_cli(project_dir: str) -> dict:
 
 
 def _checkpoint_git_commit(project_dir: str, message: str, push: bool = False) -> dict:
-    rc, out, _ = _run_git(project_dir, ["rev-parse", "--is-inside-work-tree"], timeout=10)
+    rc, out, _ = _run_git(
+        project_dir, ["rev-parse", "--is-inside-work-tree"], timeout=10
+    )
     if rc != 0 or out.strip() != "true":
         return {
             "error": "Not inside a git repository.",
             "reason": "no_repo",
             "fix": (
                 "Run the setup brief in the repository root, use "
-                f"`{PUBLIC_ARH_CLI_PREFIX} handoff \"Project title\"`, or "
+                f'`{PUBLIC_ARH_CLI_PREFIX} handoff "Project title"`, or '
                 "initialize git first."
             ),
         }
@@ -3222,7 +3321,9 @@ def _checkpoint_git_commit(project_dir: str, message: str, push: bool = False) -
 
     rc, out, _ = _run_git(project_dir, ["rev-parse", "HEAD"], timeout=10)
     sha = out.strip() if rc == 0 else ""
-    rc, out, _ = _run_git(project_dir, ["rev-parse", "--abbrev-ref", "HEAD"], timeout=10)
+    rc, out, _ = _run_git(
+        project_dir, ["rev-parse", "--abbrev-ref", "HEAD"], timeout=10
+    )
     branch = out.strip() if rc == 0 else ""
     push_failed = False
     if push:
@@ -3242,7 +3343,7 @@ def cmd_checkpoint(args):
     if not project_id:
         print(
             "Error: no ARH project_id found. Run the setup brief first, use "
-            f"`{PUBLIC_ARH_CLI_PREFIX} handoff \"Project title\"`, or pass --project-id.",
+            f'`{PUBLIC_ARH_CLI_PREFIX} handoff "Project title"`, or pass --project-id.',
             file=sys.stderr,
         )
         sys.exit(1)
@@ -3251,20 +3352,24 @@ def cmd_checkpoint(args):
     if not summary:
         print("Error: checkpoint summary is required.", file=sys.stderr)
         sys.exit(1)
-    commit_message = args.message or (summary if ":" in summary else f"research: {summary}")
+    commit_message = args.message or (
+        summary if ":" in summary else f"research: {summary}"
+    )
     warnings: list[str] = []
     commit_sha = ""
     branch = ""
     files_changed: list[str] = []
 
     if not args.no_commit:
-        push = bool(getattr(args, "push", False) and not getattr(args, "no_push", False))
-        git_result = _checkpoint_git_commit(
-            project_dir, commit_message, push=push
+        push = bool(
+            getattr(args, "push", False) and not getattr(args, "no_push", False)
         )
+        git_result = _checkpoint_git_commit(project_dir, commit_message, push=push)
         if git_result.get("error"):
             if git_result.get("reason") == "no_changes":
-                warnings.append("No uncommitted changes; recorded a log-only checkpoint.")
+                warnings.append(
+                    "No uncommitted changes; recorded a log-only checkpoint."
+                )
             else:
                 print(f"Error: {git_result['error']}", file=sys.stderr)
                 if git_result.get("fix"):
@@ -3352,7 +3457,7 @@ def cmd_snapshot_create(args):
     if not project_id:
         print(
             "Error: no ARH project_id found. Run the setup brief first, use "
-            f"`{PUBLIC_ARH_CLI_PREFIX} handoff \"Project title\"`, or pass --project-id.",
+            f'`{PUBLIC_ARH_CLI_PREFIX} handoff "Project title"`, or pass --project-id.',
             file=sys.stderr,
         )
         sys.exit(1)
@@ -3539,7 +3644,15 @@ def main():
     p_comment_add = comment_sub.add_parser("add", help="Add one comment")
     p_comment_add.add_argument(
         "entity_type",
-        choices=["snapshot", "project", "artifact", "research_project", "research_log", "research-log", "log"],
+        choices=[
+            "snapshot",
+            "project",
+            "artifact",
+            "research_project",
+            "research_log",
+            "research-log",
+            "log",
+        ],
         help="Comment target type. snapshot/artifact use the artifact UUID.",
     )
     p_comment_add.add_argument("entity_id", help="Target UUID")
@@ -3552,7 +3665,15 @@ def main():
     p_comment_list = comment_sub.add_parser("list", help="List comments on one object")
     p_comment_list.add_argument(
         "entity_type",
-        choices=["snapshot", "project", "artifact", "research_project", "research_log", "research-log", "log"],
+        choices=[
+            "snapshot",
+            "project",
+            "artifact",
+            "research_project",
+            "research_log",
+            "research-log",
+            "log",
+        ],
     )
     p_comment_list.add_argument("entity_id", help="Target UUID")
     p_comment_list.add_argument("--sort", default="new", choices=["new", "old"])
@@ -3561,10 +3682,20 @@ def main():
     p_comment_list.add_argument("--offset", type=int, default=0)
     p_comment_list.set_defaults(func=cmd_comment_list)
 
-    p_comment_update = comment_sub.add_parser("update", help="Update one of your comments")
+    p_comment_update = comment_sub.add_parser(
+        "update", help="Update one of your comments"
+    )
     p_comment_update.add_argument(
         "entity_type",
-        choices=["snapshot", "project", "artifact", "research_project", "research_log", "research-log", "log"],
+        choices=[
+            "snapshot",
+            "project",
+            "artifact",
+            "research_project",
+            "research_log",
+            "research-log",
+            "log",
+        ],
     )
     p_comment_update.add_argument("entity_id", help="Target UUID")
     p_comment_update.add_argument("comment_id", help="Comment UUID")
@@ -3573,10 +3704,20 @@ def main():
     p_comment_update.add_argument("--label", default=None)
     p_comment_update.set_defaults(func=cmd_comment_update)
 
-    p_comment_delete = comment_sub.add_parser("delete", help="Delete one of your comments")
+    p_comment_delete = comment_sub.add_parser(
+        "delete", help="Delete one of your comments"
+    )
     p_comment_delete.add_argument(
         "entity_type",
-        choices=["snapshot", "project", "artifact", "research_project", "research_log", "research-log", "log"],
+        choices=[
+            "snapshot",
+            "project",
+            "artifact",
+            "research_project",
+            "research_log",
+            "research-log",
+            "log",
+        ],
     )
     p_comment_delete.add_argument("entity_id", help="Target UUID")
     p_comment_delete.add_argument("comment_id", help="Comment UUID")
@@ -3587,7 +3728,15 @@ def main():
     )
     p_comment_promote.add_argument(
         "entity_type",
-        choices=["snapshot", "project", "artifact", "research_project", "research_log", "research-log", "log"],
+        choices=[
+            "snapshot",
+            "project",
+            "artifact",
+            "research_project",
+            "research_log",
+            "research-log",
+            "log",
+        ],
     )
     p_comment_promote.add_argument("entity_id", help="Target UUID")
     p_comment_promote.add_argument("comment_id", help="Comment UUID")
@@ -3596,9 +3745,7 @@ def main():
     p_comment_promote.set_defaults(func=cmd_comment_promote)
 
     # --- thread ---
-    p_thread = subparsers.add_parser(
-        "thread", help="Public community thread actions"
-    )
+    p_thread = subparsers.add_parser("thread", help="Public community thread actions")
     thread_sub = p_thread.add_subparsers(dest="thread_command")
 
     p_thread_create = thread_sub.add_parser("create", help="Create a public thread")
@@ -3611,7 +3758,9 @@ def main():
     )
     p_thread_create.add_argument("--initial-message", default="")
     p_thread_create.add_argument("--message-file", default="")
-    p_thread_create.add_argument("--participants", default="", help="Comma-separated handles")
+    p_thread_create.add_argument(
+        "--participants", default="", help="Comma-separated handles"
+    )
     p_thread_create.add_argument("--tags", default="", help="Comma-separated tags")
     p_thread_create.add_argument("--artifact-id", default="")
     p_thread_create.add_argument("--project-id", default="")
@@ -3789,7 +3938,9 @@ def main():
         "--summary-file", default="", help="Read summary from a file"
     )
     p_snapshot_create.add_argument("--body", default="", help="Markdown body")
-    p_snapshot_create.add_argument("--body-file", default="", help="Read body from a file")
+    p_snapshot_create.add_argument(
+        "--body-file", default="", help="Read body from a file"
+    )
     p_snapshot_create.add_argument(
         "--project-id",
         default="",
@@ -3846,9 +3997,7 @@ def main():
     p_setup.add_argument(
         "--api-key", default="", help="ARH API key (or set ARH_API_KEY)"
     )
-    p_setup.add_argument(
-        "--api-url", default="", help="ARH API URL"
-    )
+    p_setup.add_argument("--api-url", default="", help="ARH API URL")
     setup_scope = p_setup.add_mutually_exclusive_group()
     setup_scope.add_argument(
         "--global",
@@ -4053,7 +4202,9 @@ def main():
     p_handoff.add_argument(
         "--no-hooks", action="store_true", help="Skip runtime hook installation"
     )
-    p_handoff.add_argument("--no-git", action="store_true", help="Skip git auto-detection")
+    p_handoff.add_argument(
+        "--no-git", action="store_true", help="Skip git auto-detection"
+    )
     p_handoff.add_argument(
         "--enable-auto-commit",
         action="store_true",

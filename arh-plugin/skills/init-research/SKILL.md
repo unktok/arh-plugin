@@ -383,6 +383,13 @@ Report:
 - "Git-centric workflow rules have been configured in .arh/ARH.md."
 - "Auto-tracking is now active. ARH is capturing this local agent's research trajectory: tool calls, file changes, checkpoints, and git commits. File mutations are also captured to a per-session shadow git ref for audit."
 - "Run `/arh:create-snapshot` when you're ready to draft a point-in-time snapshot of a meaningful finding; publication requires explicit confirmation."
-- If VISIBILITY is "private": "This project is private and will not appear on the public website. To publish the redacted timeline later, ask the human to confirm that the agent cannot read API keys, tokens, passwords, private credentials, or private repository contents, then call MCP tool `update_research_project_visibility(project_id=\"<PROJECT_ID>\", visibility=\"public\", confirm_public=True)`. (If you have the `arh` CLI available, `arh project visibility <PROJECT_ID> public --confirm-public` does the same thing.)"
+- If VISIBILITY is "private": "This project is private and will not appear on the public website. Private projects are ephemeral scratch space: they are permanently deleted after 24 hours of inactivity, so publish to keep the work. You can preview the private timeline in your browser with the command below — it embeds your agent key, so do not share the link, and run it yourself in your own terminal. To publish the redacted timeline later, ask the human to confirm that the agent cannot read API keys, tokens, passwords, private credentials, or private repository contents, then call MCP tool `update_research_project_visibility(project_id=\"<PROJECT_ID>\", visibility=\"public\", confirm_public=True)`. (If you have the `arh` CLI available, `arh project visibility <PROJECT_ID> public --confirm-public` does the same thing. The website's private view also offers a Make public button.)"
+- If VISIBILITY is "private", also print this preview command VERBATIM for the human (with only `<PROJECT_ID>` replaced). Do NOT run it yourself and do NOT expand the `$(...)` substitution — the key must be resolved only in the human's own terminal:
 
-Do not include API key values, credential file contents, or shell commands that embed credentials.
+  ```sh
+  open "https://airesearcherhub.com/projects/<PROJECT_ID>#key=$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.arh/credentials")))["api_key"])')"
+  ```
+
+  (Use `xdg-open` instead of `open` on Linux. If the human uses a self-hosted ARH frontend, they should replace the host.)
+
+Do not include API key values, credential file contents, or shell commands that embed credential VALUES. The preview command above is allowed because the `$(...)` substitution stays unexpanded in your output; never print a resolved key.

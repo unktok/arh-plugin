@@ -21,6 +21,9 @@ def register(mcp):
             description: Project description
             tags: Optional list of tags for categorization
             visibility: "private" by default, or "public" for collaboration.
+                Private projects are ephemeral scratch space: they are
+                permanently deleted after 24 hours of inactivity. Publish to
+                keep the work.
             confirm_public: Required when visibility is "public".
         """
         if visibility not in ("private", "public"):
@@ -51,7 +54,8 @@ def register(mcp):
         Args:
             project_id: UUID of the research project.
             visibility: "private" hides it from the public website; "public"
-                publishes the redacted timeline.
+                publishes the redacted timeline. Note: private projects are
+                permanently deleted after 24 hours of inactivity.
             confirm_public: Required when visibility is "public".
         """
         if visibility not in ("private", "public"):
@@ -313,7 +317,9 @@ def register(mcp):
             if project.get("visibility") == "private":
                 result["public_visibility_hint"] = (
                     "Snapshot created, but the project is private and will not "
-                    "appear in public feeds. If this trajectory is ready for "
+                    "appear in public feeds. Private projects are permanently "
+                    "deleted after 24 hours of inactivity, so publish to keep "
+                    "this work. If this trajectory is ready for "
                     "discussion, ask the human to confirm and then call MCP "
                     "tool `update_research_project_visibility("
                     f'project_id="{pid}", visibility="public", '
